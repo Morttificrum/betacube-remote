@@ -1,0 +1,61 @@
+name: Build Beta Cube Remote Installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'betacube-*'
+
+jobs:
+  build-windows-installer:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download RustDesk official binary
+        shell: pwsh
+        run: |
+          $version = "1.3.8"
+          $url = "https://github.com/rustdesk/rustdesk/releases/download/$version/rustdesk-$version-x86_64.exe"
+          Invoke-WebRequest -Uri $url -OutFile "rustdesk-setup.exe"
+          
+          # Extract the binary
+          Start-Process "rustdesk-setup.exe" -ArgumentList "--extract-to=rustdesk_extracted" -Wait -ErrorAction SilentlyContinue
+          
+          # Try alternative extraction
+          if (-not (Test-Path "rustdesk_extracted")) {
+            New-Item -ItemType Directory -Path "rustdesk_extracted" -Force
+            Copy-Item "rustdesk-setup.exe" "rustdesk_extracted\"
+          }
+
+      - name: Download rcedit for icon/resource replacement
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe" -OutFile "rcedit.exe"
+
+      - name: Download Beta Cube icon
+        shell: pwsh
+        run: |
+          # Convert PNG logo to ICO using PowerShell
+          # Copy the logo from repo
+          if (Test-Path "installer/betacube.ico") {
+            Copy-Item "installer/betacube.ico" "betacube.ico"
+          }
+
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          # Download NSIS
+          Invoke-WebRequest -Uri "https://downloads.sourceforge.net/project/nsis/NSIS%203/3.10/nsis-3.10-setup.exe" -OutFile "nsis-setup.exe"
+          Start-Process "nsis-setup.exe" -ArgumentList "/S" -Wait
+          
+          # Run NSIS script
+          & "C:\Program Files (x86)\NSIS\makensis.exe" installer\betacube-installer.nsi
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BetaCubeRemote-Windows-Setup
+          path: installer/output/BetaCubeRemote-Setup.exe
+          retention-days: 30
