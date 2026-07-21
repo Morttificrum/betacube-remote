@@ -1,11 +1,11 @@
 [package]
-name = "rustdesk"
+name = "betacube-remote"
 version = "1.4.8"
 authors = ["rustdesk <info@rustdesk.com>"]
 edition = "2021"
 build= "build.rs"
 description = "RustDesk Remote Desktop"
-default-run = "rustdesk"
+default-run = "betacube-remote"
 rust-version = "1.75"
 
 [lib]
