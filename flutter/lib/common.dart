@@ -251,9 +251,9 @@ class MyTheme {
   MyTheme._();
 
   static const Color grayBg = Color(0xFFEFEFF2);
-  static const Color accent = Color(0xFF0071FF);
-  static const Color accent50 = Color(0x770071FF);
-  static const Color accent80 = Color(0xAA0071FF);
+  static const Color accent = Color(0xFF22D3EE);
+  static const Color accent50 = Color(0x7722D3EE);
+  static const Color accent80 = Color(0xAA22D3EE);
   static const Color canvasColor = Color(0xFF212121);
   static const Color border = Color(0xFFCCCCCC);
   static const Color idColor = Color(0xFF00B6F0);
@@ -454,7 +454,7 @@ class MyTheme {
         style:
             MenuStyle(backgroundColor: MaterialStatePropertyAll(Colors.white))),
     colorScheme: ColorScheme.light(
-        primary: Colors.blue, secondary: accent, background: grayBg),
+        primary: Color(0xFF1E50D2), secondary: accent, background: grayBg),
     popupMenuTheme: PopupMenuThemeData(
         color: Colors.white,
         shape: RoundedRectangleBorder(
@@ -562,7 +562,7 @@ class MyTheme {
         style: MenuStyle(
             backgroundColor: MaterialStatePropertyAll(Color(0xFF121212)))),
     colorScheme: ColorScheme.dark(
-      primary: Colors.blue,
+      primary: Color(0xFF1E50D2),
       secondary: accent,
       background: Color(0xFF24252B),
     ),
