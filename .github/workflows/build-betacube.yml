@@ -2,6 +2,11 @@ name: Build Beta Cube Remote Installer
 
 on:
   workflow_dispatch:
+    inputs:
+      fork_tag:
+        description: "Tag do release do build-fork.yml (deixe vazio pra usar o binário oficial do RustDesk sem nosso rebrand de código)"
+        type: string
+        default: ""
   push:
     tags:
       - 'betacube-*'
@@ -14,7 +19,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download RustDesk binary
+      - name: Download our fork build
+        if: ${{ inputs.fork_tag != '' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ inputs.fork_tag }}" --repo ${{ github.repository }} --pattern "rustdesk-*-x86_64.exe" --dir .
+          $exe = Get-ChildItem -Filter "rustdesk-*-x86_64.exe" | Select-Object -First 1
+          if (-not $exe) { Write-Error "Nenhum exe x86_64 encontrado no release ${{ inputs.fork_tag }}"; exit 1 }
+          Move-Item -Force $exe.FullName rustdesk.exe
+          Write-Host "Usando build do fork: $($exe.Name)"
+
+      - name: Download RustDesk binary (oficial, sem nosso rebrand de código)
+        if: ${{ inputs.fork_tag == '' }}
         shell: pwsh
         run: |
           $version = "1.3.8"

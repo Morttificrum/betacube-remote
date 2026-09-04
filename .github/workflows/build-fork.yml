@@ -1,0 +1,27 @@
+name: Build Beta Cube Remote (compila o fork, todas as plataformas)
+
+# Dispara o pipeline de build oficial do RustDesk (flutter-build.yml), que
+# compila o NOSSO código-fonte (ícone/cores/strings já rebrandeados) em vez de
+# reempacotar o binário oficial. Sem chave de assinatura configurada, os jobs
+# caem automaticamente no caminho "unsigned"/debug-signed.
+#
+# Publica os artefatos (exe/msi do Windows, apk do Android) como assets de um
+# GitHub Release "prerelease" com a tag abaixo. Depois de terminar (~1-2h,
+# multi-plataforma em paralelo), use build-betacube.yml com o mesmo fork_tag
+# pra empacotar o instalador NSIS a partir do exe recém-compilado.
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload-tag:
+        description: "Tag do prerelease onde os artefatos serão publicados"
+        type: string
+        default: "betacube-build"
+
+jobs:
+  build:
+    uses: ./.github/workflows/flutter-build.yml
+    with:
+      upload-artifact: true
+      upload-tag: ${{ inputs.upload-tag }}
+    secrets: inherit
