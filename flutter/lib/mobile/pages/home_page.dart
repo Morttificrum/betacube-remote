@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_hbb/mobile/pages/server_page.dart';
-import 'package:flutter_hbb/mobile/pages/settings_page.dart';
-import 'package:flutter_hbb/web/settings_page.dart';
+import 'package:betacube_remote/mobile/pages/server_page.dart';
+import 'package:betacube_remote/mobile/pages/settings_page.dart';
+import 'package:betacube_remote/web/settings_page.dart';
 import 'package:get/get.dart';
 import '../../common.dart';
 import '../../common/widgets/chat_page.dart';

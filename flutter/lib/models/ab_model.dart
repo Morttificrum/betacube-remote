@@ -2,12 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_hbb/common/hbbs/hbbs.dart';
-import 'package:flutter_hbb/common/widgets/peers_view.dart';
-import 'package:flutter_hbb/consts.dart';
-import 'package:flutter_hbb/models/model.dart';
-import 'package:flutter_hbb/models/peer_model.dart';
-import 'package:flutter_hbb/models/platform_model.dart';
+import 'package:betacube_remote/common/hbbs/hbbs.dart';
+import 'package:betacube_remote/common/widgets/peers_view.dart';
+import 'package:betacube_remote/consts.dart';
+import 'package:betacube_remote/models/model.dart';
+import 'package:betacube_remote/models/peer_model.dart';
+import 'package:betacube_remote/models/platform_model.dart';
 import 'package:get/get.dart';
 import 'package:bot_toast/bot_toast.dart';
 

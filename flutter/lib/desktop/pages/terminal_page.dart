@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_hbb/common.dart';
-import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
-import 'package:flutter_hbb/models/model.dart';
-import 'package:flutter_hbb/models/terminal_model.dart';
+import 'package:betacube_remote/common.dart';
+import 'package:betacube_remote/desktop/widgets/tabbar_widget.dart';
+import 'package:betacube_remote/models/model.dart';
+import 'package:betacube_remote/models/terminal_model.dart';
 import 'package:xterm/xterm.dart';
 import 'terminal_connection_manager.dart';
 

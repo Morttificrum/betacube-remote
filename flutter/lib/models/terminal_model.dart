@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_hbb/common.dart';
-import 'package:flutter_hbb/consts.dart';
-import 'package:flutter_hbb/main.dart';
+import 'package:betacube_remote/common.dart';
+import 'package:betacube_remote/consts.dart';
+import 'package:betacube_remote/main.dart';
 import 'package:xterm/xterm.dart';
 
 import 'model.dart';

@@ -6,18 +6,18 @@ import 'package:bot_toast/bot_toast.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_hbb/common/widgets/overlay.dart';
-import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
-import 'package:flutter_hbb/desktop/pages/install_page.dart';
-import 'package:flutter_hbb/desktop/pages/server_page.dart';
-import 'package:flutter_hbb/desktop/screen/desktop_file_transfer_screen.dart';
-import 'package:flutter_hbb/desktop/screen/desktop_view_camera_screen.dart';
-import 'package:flutter_hbb/desktop/screen/desktop_port_forward_screen.dart';
-import 'package:flutter_hbb/desktop/screen/desktop_remote_screen.dart';
-import 'package:flutter_hbb/desktop/screen/desktop_terminal_screen.dart';
-import 'package:flutter_hbb/desktop/widgets/refresh_wrapper.dart';
-import 'package:flutter_hbb/models/state_model.dart';
-import 'package:flutter_hbb/utils/multi_window_manager.dart';
+import 'package:betacube_remote/common/widgets/overlay.dart';
+import 'package:betacube_remote/desktop/pages/desktop_tab_page.dart';
+import 'package:betacube_remote/desktop/pages/install_page.dart';
+import 'package:betacube_remote/desktop/pages/server_page.dart';
+import 'package:betacube_remote/desktop/screen/desktop_file_transfer_screen.dart';
+import 'package:betacube_remote/desktop/screen/desktop_view_camera_screen.dart';
+import 'package:betacube_remote/desktop/screen/desktop_port_forward_screen.dart';
+import 'package:betacube_remote/desktop/screen/desktop_remote_screen.dart';
+import 'package:betacube_remote/desktop/screen/desktop_terminal_screen.dart';
+import 'package:betacube_remote/desktop/widgets/refresh_wrapper.dart';
+import 'package:betacube_remote/models/state_model.dart';
+import 'package:betacube_remote/utils/multi_window_manager.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
@@ -30,8 +30,8 @@ import 'mobile/pages/server_page.dart';
 import 'mobile/widgets/deploy_dialog.dart';
 import 'models/platform_model.dart';
 
-import 'package:flutter_hbb/plugin/handlers.dart'
-    if (dart.library.html) 'package:flutter_hbb/web/plugin/handlers.dart';
+import 'package:betacube_remote/plugin/handlers.dart'
+    if (dart.library.html) 'package:betacube_remote/web/plugin/handlers.dart';
 
 /// Basic window and launch properties.
 int? kWindowId;

@@ -3,15 +3,15 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_hbb/common.dart';
-import 'package:flutter_hbb/common/shared_state.dart';
-import 'package:flutter_hbb/common/widgets/dialog.dart';
-import 'package:flutter_hbb/common/widgets/login.dart';
-import 'package:flutter_hbb/consts.dart';
-import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
-import 'package:flutter_hbb/models/model.dart';
-import 'package:flutter_hbb/models/platform_model.dart';
-import 'package:flutter_hbb/utils/multi_window_manager.dart';
+import 'package:betacube_remote/common.dart';
+import 'package:betacube_remote/common/shared_state.dart';
+import 'package:betacube_remote/common/widgets/dialog.dart';
+import 'package:betacube_remote/common/widgets/login.dart';
+import 'package:betacube_remote/consts.dart';
+import 'package:betacube_remote/desktop/widgets/remote_toolbar.dart';
+import 'package:betacube_remote/models/model.dart';
+import 'package:betacube_remote/models/platform_model.dart';
+import 'package:betacube_remote/utils/multi_window_manager.dart';
 import 'package:get/get.dart';
 import 'package:url_launcher/url_launcher.dart';
 

@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter_hbb/common.dart';
-import 'package:flutter_hbb/consts.dart';
+import 'package:betacube_remote/common.dart';
+import 'package:betacube_remote/consts.dart';
 
-import 'package:flutter_hbb/models/peer_model.dart';
+import 'package:betacube_remote/models/peer_model.dart';
 
 import '../../models/platform_model.dart';
 

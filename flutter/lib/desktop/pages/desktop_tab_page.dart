@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_hbb/common.dart';
-import 'package:flutter_hbb/consts.dart';
-import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
-import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
-import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
-import 'package:flutter_hbb/models/platform_model.dart';
-import 'package:flutter_hbb/models/state_model.dart';
+import 'package:betacube_remote/common.dart';
+import 'package:betacube_remote/consts.dart';
+import 'package:betacube_remote/desktop/pages/desktop_home_page.dart';
+import 'package:betacube_remote/desktop/pages/desktop_setting_page.dart';
+import 'package:betacube_remote/desktop/widgets/tabbar_widget.dart';
+import 'package:betacube_remote/models/platform_model.dart';
+import 'package:betacube_remote/models/state_model.dart';
 import 'package:get/get.dart';
 import 'package:window_manager/window_manager.dart';
 // import 'package:flutter/services.dart';
