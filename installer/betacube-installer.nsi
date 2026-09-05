@@ -56,7 +56,7 @@ Section "Instalar ${APP_NAME}" SecMain
   FileWrite $0 "custom-rendezvous-server = '${RUSTDESK_SERVER}'$\n"
   FileWrite $0 "key = '${RUSTDESK_KEY}'$\n"
   FileWrite $0 "relay-server = '${RUSTDESK_SERVER}'$\n"
-  FileWrite $0 "api-server = 'http://${RUSTDESK_SERVER}'$\n"
+  FileWrite $0 "api-server = 'http://${RUSTDESK_SERVER}:21114'$\n"
   FileWrite $0 "direct-server = 'Y'$\n"
   FileClose $0
 
