@@ -18,6 +18,9 @@ on:
         type: string
         default: "betacube-build"
 
+permissions:
+  contents: write
+
 jobs:
   build:
     uses: ./.github/workflows/flutter-build.yml
