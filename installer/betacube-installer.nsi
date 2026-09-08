@@ -7,7 +7,7 @@
 !define APP_PUBLISHER "Beta Cube Soluções em TI"
 !define APP_URL "https://betacube.com.br"
 !define APP_EXE "betacube-remote.exe"
-!define RUSTDESK_SERVER "137.131.223.246"
+!define RUSTDESK_SERVER "140.238.184.251"
 !define RUSTDESK_KEY "YcoVB4h1Ldi08DJmV4X1Yk7u0gi0yQFmqCgbLwZ9wsk="
 !define INSTALL_DIR "$PROGRAMFILES64\${APP_NAME}"
 !define UNINSTALL_REG "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
