@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:betacube_remote/common.dart';
 import 'package:betacube_remote/consts.dart';
 import 'package:betacube_remote/desktop/pages/desktop_home_page.dart';
+import 'package:betacube_remote/desktop/pages/equipment_page.dart';
 import 'package:betacube_remote/desktop/pages/desktop_setting_page.dart';
 import 'package:betacube_remote/desktop/widgets/tabbar_widget.dart';
 import 'package:betacube_remote/models/platform_model.dart';
@@ -52,6 +53,15 @@ class _DesktopTabPageState extends State<DesktopTabPage> {
         page: DesktopHomePage(
           key: const ValueKey(kTabLabelHomePage),
         )));
+    if (!bind.isIncomingOnly()) {
+      tabController.add(TabInfo(
+          key: kTabLabelEquipmentPage,
+          label: kTabLabelEquipmentPage,
+          selectedIcon: Icons.computer,
+          unselectedIcon: Icons.computer,
+          closable: false,
+          page: const EquipmentPage()));
+    }
     if (bind.isIncomingOnly()) {
       tabController.onSelected = (key) {
         if (key == kTabLabelHomePage) {
