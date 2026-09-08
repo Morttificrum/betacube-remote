@@ -122,6 +122,12 @@ impl Drop for SimpleCallOnReturn {
 }
 
 pub fn global_init() -> bool {
+    // Beta Cube Remote: default app identity for this fork. Overridable by the
+    // official (signed) custom-client mechanism in `read_custom_client`, which
+    // runs after this in both the desktop (core_main) and mobile (flutter_ffi)
+    // init paths — we just don't ship a custom.txt, so this default always wins.
+    *config::APP_NAME.write().unwrap() = "Beta Cube Remote".to_owned();
+
     #[cfg(target_os = "linux")]
     {
         if !crate::platform::linux::is_x11() {

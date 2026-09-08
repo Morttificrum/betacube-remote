@@ -116,4 +116,35 @@ class EquipmentModel {
     selectedEntityId.value = entityId;
     pull();
   }
+
+  /// Sensores/drivers do device (Fase 3) — devolve null se o bridge não
+  /// tiver nada ainda (device sem agente, ou ainda não relatou sensores).
+  Future<Map<String, dynamic>?> fetchSensors(String rustdeskId) async {
+    final api = await bind.mainGetApiServer();
+    if (api.isEmpty) return null;
+    try {
+      final resp = await http.get(Uri.parse('$api/internal/devices/$rustdeskId/sensors'));
+      if (resp.statusCode != 200) return null;
+      return jsonDecode(resp.body) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Enfileira uma Ação Rápida pro device — executa no próximo contato
+  /// (heartbeat) da máquina com o bridge, não é instantâneo.
+  Future<bool> enqueueCommand(String rustdeskId, String action, [Map<String, dynamic>? params]) async {
+    final api = await bind.mainGetApiServer();
+    if (api.isEmpty) return false;
+    try {
+      final resp = await http.post(
+        Uri.parse('$api/internal/commands'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'rustdesk_id': rustdeskId, 'action': action, 'params': params ?? {}}),
+      );
+      return resp.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
 }

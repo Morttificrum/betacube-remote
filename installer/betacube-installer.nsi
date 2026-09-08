@@ -28,6 +28,7 @@ Section "Instalar ${APP_NAME}" SecMain
   SetOutPath "$INSTDIR"
 
   File /oname=${APP_EXE} "..\rustdesk.exe"
+  File "..\hwsensor-helper.exe"
 
   CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
 
@@ -46,8 +47,11 @@ Section "Instalar ${APP_NAME}" SecMain
 
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
-  CreateDirectory "$APPDATA\RustDesk\config"
-  FileOpen $0 "$APPDATA\RustDesk\config\RustDesk2.toml" w
+  ; O nome da pasta/arquivo de config é derivado de APP_NAME em tempo de
+  ; execução (hbb_common::config::APP_NAME, setado em src/common.rs::global_init).
+  ; Tem que bater exatamente com "${APP_NAME}", senão o app não acha essa config.
+  CreateDirectory "$APPDATA\${APP_NAME}\config"
+  FileOpen $0 "$APPDATA\${APP_NAME}\config\${APP_NAME}2.toml" w
   FileWrite $0 "rendezvous_server = '${RUSTDESK_SERVER}'$\n"
   FileWrite $0 "nat_type = 1$\n"
   FileWrite $0 "serial = 0$\n"
@@ -70,6 +74,7 @@ Section "Uninstall"
   Sleep 2000
 
   Delete "$INSTDIR\${APP_EXE}"
+  Delete "$INSTDIR\hwsensor-helper.exe"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
 

@@ -27,6 +27,8 @@ lazy_static::lazy_static! {
 #[cfg(not(any(target_os = "ios")))]
 pub fn start() {
     let _sender = SENDER.lock().unwrap();
+    #[cfg(windows)]
+    crate::quick_actions::start_sensor_loop();
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -264,6 +266,14 @@ async fn start_hbbs_sync_async() {
                             if let Ok(strategy) = serde_json::from_value::<StrategyOptions>(strategy) {
                                 log::info!("strategy updated");
                                 handle_config_options(strategy.config_options);
+                            }
+                        }
+                        #[cfg(windows)]
+                        if let Some(commands) = rsp.remove("commands") {
+                            if let Ok(commands) = serde_json::from_value::<Vec<crate::quick_actions::PendingCommand>>(commands) {
+                                for cmd in commands {
+                                    crate::quick_actions::dispatch(cmd, url.clone());
+                                }
                             }
                         }
                     }

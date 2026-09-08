@@ -41,6 +41,12 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile "rustdesk.exe" -UseBasicParsing
           Write-Host "Download complete: $(Get-Item rustdesk.exe | Select-Object -ExpandProperty Length) bytes"
 
+      - name: Build hwsensor-helper (Fase 3)
+        shell: pwsh
+        run: |
+          dotnet publish native\hwsensor-helper -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o .
+          Get-Item "hwsensor-helper.exe" | Select-Object Name, Length
+
       - name: Create installer output directory
         shell: pwsh
         run: New-Item -ItemType Directory -Path "installer\output" -Force

@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import '../../common.dart';
 import '../../models/equipment_model.dart';
 import '../../models/model.dart';
+import 'equipment_detail_dialog.dart';
 
 /// Aba "Equipamentos": inventário do GLPI por entidade/cliente, cruzado com
 /// o status de acesso remoto (quais máquinas já têm o Beta Cube Remote
@@ -142,7 +143,7 @@ class _EquipmentRow extends StatelessWidget {
               child: Text(translate('Connect')),
             )
           : null,
-      onTap: hasAgent ? () => connect(context, item.rustdeskId!) : null,
+      onTap: hasAgent ? () => showEquipmentDetailDialog(context, item) : null,
     );
   }
 }
