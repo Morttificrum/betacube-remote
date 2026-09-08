@@ -196,51 +196,113 @@ fn unstick_printer() -> (String, Value) {
     )
 }
 
+/// Reinicia serviço(s) Windows encontrados por nome, porta ouvida, ou
+/// substring da linha de comando do processo — os 3 critérios são
+/// combináveis, um "match" em qualquer um já entra na lista.
+///
+/// "restart_tomcat"/"restart_sitef" usam `name_contains` (nome sabido).
+/// "restart_tcserver" (Gertec, roda como java.exe — nome de processo não
+/// identifica nada) usa `port` e/ou `cmdline_contains`, já que múltiplas
+/// JVMs podem estar rodando na máquina e só uma é o TC Server.
+///
+/// Escopo estritamente "tá rodando? religa se não" — sem tocar em config
+/// de conexão com banco/tabela de preço (isso é território do Datamax,
+/// fora do nosso escopo).
 #[cfg(windows)]
 fn restart_services_matching(cmd: &PendingCommand) -> (String, Value) {
-    // Ações "restart_tomcat" (descoberta por nome, sem nome fixo) e
-    // "restart_sitef" (nomes já confirmados) usam essa mesma função — quem
-    // decide os `patterns` é o bridge/Flutter, ao enfileirar o comando.
-    let patterns: Vec<String> = cmd
+    let name_patterns: Vec<String> = cmd
         .params
         .get("name_contains")
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_lowercase())).collect())
         .unwrap_or_default();
-    if patterns.is_empty() {
+    let port = cmd.params.get("port").and_then(|v| v.as_i64());
+    let cmdline_pattern = cmd
+        .params
+        .get("cmdline_contains")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_lowercase());
+
+    if name_patterns.is_empty() && port.is_none() && cmdline_pattern.is_none() {
         return (
             "failed".to_owned(),
-            json!({"error": "params.name_contains vazio — nada pra reiniciar"}),
+            json!({"error": "nenhum critério informado (name_contains/port/cmdline_contains)"}),
         );
     }
 
-    let (list_status, list_result) = run_powershell(
-        "Get-Service | Select-Object Name,DisplayName,Status | ConvertTo-Json",
+    let (status, dump) = run_powershell(
+        "$services = Get-CimInstance Win32_Service | Where-Object { $_.ProcessId -ne 0 } | Select-Object Name,ProcessId; \
+         $processes = Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine; \
+         $listening = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Select-Object LocalPort,OwningProcess; \
+         @{services=$services; processes=$processes; listening=$listening} | ConvertTo-Json -Depth 4 -Compress",
     );
-    if list_status != "done" {
-        return (list_status, list_result);
+    if status != "done" {
+        return (status, dump);
     }
-    let services: Vec<Value> = list_result
+    let parsed: Value = match dump
         .get("stdout")
         .and_then(|s| s.as_str())
-        .and_then(|s| serde_json::from_str::<Value>(s).ok())
-        .map(|v| match v {
-            Value::Array(arr) => arr,
-            other => vec![other],
-        })
-        .unwrap_or_default();
+        .and_then(|s| serde_json::from_str(s).ok())
+    {
+        Some(v) => v,
+        None => return ("failed".to_owned(), json!({"error": "falha ao interpretar saída do PowerShell"})),
+    };
+    let as_vec = |key: &str| -> Vec<Value> {
+        match parsed.get(key) {
+            Some(Value::Array(arr)) => arr.clone(),
+            Some(other) => vec![other.clone()],
+            None => Vec::new(),
+        }
+    };
+    let services = as_vec("services");
+    let processes = as_vec("processes");
+    let listening = as_vec("listening");
+
+    let mut matched_pids: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    if let Some(port) = port {
+        for l in &listening {
+            if l.get("LocalPort").and_then(|v| v.as_i64()) == Some(port) {
+                if let Some(pid) = l.get("OwningProcess").and_then(|v| v.as_i64()) {
+                    matched_pids.insert(pid);
+                }
+            }
+        }
+    }
+    if let Some(pattern) = &cmdline_pattern {
+        for p in &processes {
+            let cmdline_match = p
+                .get("CommandLine")
+                .and_then(|v| v.as_str())
+                .map(|cl| cl.to_lowercase().contains(pattern.as_str()))
+                .unwrap_or(false);
+            if cmdline_match {
+                if let Some(pid) = p.get("ProcessId").and_then(|v| v.as_i64()) {
+                    matched_pids.insert(pid);
+                }
+            }
+        }
+    }
 
     let matched: Vec<String> = services
         .iter()
-        .filter_map(|s| s.get("Name").and_then(|n| n.as_str()))
-        .filter(|name| patterns.iter().any(|p| name.to_lowercase().contains(p)))
-        .map(|s| s.to_owned())
+        .filter_map(|s| {
+            let name = s.get("Name").and_then(|v| v.as_str())?;
+            let pid = s.get("ProcessId").and_then(|v| v.as_i64());
+            let name_match = !name_patterns.is_empty() && name_patterns.iter().any(|p| name.to_lowercase().contains(p));
+            let pid_match = pid.map_or(false, |pid| matched_pids.contains(&pid));
+            (name_match || pid_match).then(|| name.to_owned())
+        })
         .collect();
 
     if matched.is_empty() {
+        let note = if matched_pids.is_empty() {
+            "nenhum serviço ou processo encontrado — parece parado; sem nome de serviço confirmado, não dá pra iniciar automaticamente"
+        } else {
+            "processo encontrado (por porta/linha de comando) mas não é um serviço Windows registrado — não dá pra reiniciar sem saber o comando de inicialização"
+        };
         return (
             "failed".to_owned(),
-            json!({"error": "nenhum serviço encontrado", "patterns": patterns}),
+            json!({"error": note, "name_contains": name_patterns, "port": port}),
         );
     }
 
