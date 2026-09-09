@@ -7,6 +7,10 @@ on:
         description: "Tag do release do build-fork.yml (deixe vazio pra usar o binário oficial do RustDesk sem nosso rebrand de código)"
         type: string
         default: ""
+      store_name:
+        description: "Nome da loja/cliente (opcional) -- gera betacube-remote-<NOME>-setup.exe com a tag já embutida, em vez do instalador genérico"
+        type: string
+        default: ""
   push:
     tags:
       - 'betacube-*'
@@ -65,15 +69,30 @@ jobs:
             $nsisPath = "C:\Program Files (x86)\NSIS\makensis.exe"
           }
           Write-Host "Using NSIS at: $nsisPath"
-          & $nsisPath /V3 installer\betacube-installer.nsi
+
+          $storeArg = @()
+          $rawStoreName = "${{ inputs.store_name }}"
+          if ($rawStoreName -ne "") {
+            # NSIS não sanitiza nada disso sozinho -- só alfanumérico/hífen, sem
+            # acento/espaço/caractere ilegal em nome de arquivo.
+            $storeName = ($rawStoreName -replace '[^A-Za-z0-9-]', '')
+            if ($storeName -eq "") { Write-Error "store_name '$rawStoreName' não sobrou nada depois de sanitizar"; exit 1 }
+            Write-Host "Loja/cliente: $storeName"
+            $storeArg = @("/DSTORE_NAME=$storeName")
+          }
+
+          & $nsisPath @storeArg /V3 installer\betacube-installer.nsi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Host "Installer built successfully!"
-          Get-Item "installer\output\BetaCubeRemote-Setup.exe" | Select-Object Name, Length
+          $outFile = Get-ChildItem "installer\output\*.exe" | Select-Object -First 1
+          Get-Item $outFile.FullName | Select-Object Name, Length
+          echo "installer_path=$($outFile.FullName)" >> $env:GITHUB_ENV
+          echo "installer_name=$($outFile.Name)" >> $env:GITHUB_ENV
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BetaCubeRemote-Windows-Setup
-          path: installer/output/BetaCubeRemote-Setup.exe
+          name: ${{ env.installer_name }}
+          path: ${{ env.installer_path }}
           retention-days: 90
           if-no-files-found: error

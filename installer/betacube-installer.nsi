@@ -12,8 +12,20 @@
 !define INSTALL_DIR "$PROGRAMFILES64\${APP_NAME}"
 !define UNINSTALL_REG "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
 
+; STORE_NAME: tag de loja/cliente, passada via "makensis /DSTORE_NAME=...".
+; Vazio = instalador genérico de sempre (guard pra continuar buildável sem
+; o parâmetro, ex. teste local). Ver betacube-bridge: vira o campo
+; preset-note no sysinfo, usado pra criar/associar a Entidade da loja no GLPI.
+!ifndef STORE_NAME
+!define STORE_NAME ""
+!endif
+
 Name "${APP_NAME}"
+!if "${STORE_NAME}" == ""
 OutFile "output\BetaCubeRemote-Setup.exe"
+!else
+OutFile "output\betacube-remote-${STORE_NAME}-setup.exe"
+!endif
 InstallDir "${INSTALL_DIR}"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
@@ -62,6 +74,9 @@ Section "Instalar ${APP_NAME}" SecMain
   FileWrite $0 "relay-server = '${RUSTDESK_SERVER}'$\n"
   FileWrite $0 "api-server = 'http://${RUSTDESK_SERVER}:21114'$\n"
   FileWrite $0 "direct-server = 'Y'$\n"
+!if "${STORE_NAME}" != ""
+  FileWrite $0 "preset-note = '${STORE_NAME}'$\n"
+!endif
   FileClose $0
 
   ExecWait '"$INSTDIR\${APP_EXE}" --install'
