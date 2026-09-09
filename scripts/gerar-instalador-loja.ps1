@@ -79,10 +79,19 @@ Write-Host "Baixando instalador..."
 gh run download $runId --repo $Repo --dir $OutputDir
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-$exe = Get-ChildItem -Path $OutputDir -Filter "*$StoreName*setup.exe" -Recurse | Select-Object -First 1
+$exe = Get-ChildItem -Path $OutputDir -Filter "*$StoreName*setup.exe" -Recurse -File | Select-Object -First 1
 if ($exe) {
-    Move-Item -Force $exe.FullName (Join-Path $OutputDir $exe.Name)
-    Write-Host "Pronto: $(Join-Path $OutputDir $exe.Name)"
+    # "gh run download" cria uma pasta com o mesmo nome do artefato (que é
+    # o mesmo nome do .exe) contendo o arquivo -- move pra fora e limpa a
+    # pasta, senão colide de nome com ela mesma.
+    $finalPath = Join-Path $OutputDir $exe.Name
+    $tempPath = Join-Path $OutputDir "_tmp_$($exe.Name)"
+    Move-Item -Force $exe.FullName $tempPath
+    if (Test-Path $finalPath) {
+        Remove-Item -Recurse -Force $finalPath
+    }
+    Move-Item -Force $tempPath $finalPath
+    Write-Host "Pronto: $finalPath"
 } else {
     Write-Host "Build terminou, mas não achei o .exe automaticamente -- confira a pasta '$OutputDir'."
 }
