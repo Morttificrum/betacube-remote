@@ -47,9 +47,11 @@ UninstPage instfiles
 Section "Instalar ${APP_NAME}" SecMain
   SetOutPath "$INSTDIR"
 
-  ; /oname= precisa de aspas -- ${APP_EXE} agora tem espaço ("Beta Cube
-  ; Remote.exe"), sem aspas o NSIS quebraria isso em tokens separados.
-  File /oname="${APP_EXE}" "..\rustdesk.exe"
+  ; ${APP_EXE} agora tem espaço ("Beta Cube Remote.exe") -- a aspa tem que
+  ; envolver o argumento /oname=... INTEIRO (prefixo incluso), não só o
+  ; valor depois do "=": `/oname="valor"` quebra o parser do NSIS (erro de
+  ; "Usage: File..."), o certo é `"/oname=valor"`.
+  File "/oname=${APP_EXE}" "..\rustdesk.exe"
   File "..\hwsensor-helper.exe"
 
   ; O nome da pasta/arquivo de config é derivado de APP_NAME em tempo de
