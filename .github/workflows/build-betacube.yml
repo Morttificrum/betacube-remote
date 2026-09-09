@@ -23,27 +23,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Usamos o .msi (não o .exe portátil do release) de propósito: o .exe
+      # portátil é um stub autoextraível (libs/portable/src/main.rs) que
+      # SEMPRE extrai/roda o app de verdade a partir de um caminho fixo
+      # (%LOCALAPPDATA%\rustdesk, hardcoded, ignora nosso APP_NAME) e depois
+      # o --install copia tudo de volta com os nomes originais -- foi a causa
+      # raiz real do "instala sem erro mas não abre nada". O .msi contém a
+      # build "crua" do Flutter (RustDesk.exe pequeno + DLLs ao lado, sem
+      # esse wrapper), extraída via `msiexec /a` (instalação administrativa,
+      # só copia arquivo, não precisa admin/UAC).
       - name: Download our fork build
         if: ${{ inputs.fork_tag != '' }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download "${{ inputs.fork_tag }}" --repo ${{ github.repository }} --pattern "rustdesk-*-x86_64.exe" --dir .
-          $exe = Get-ChildItem -Filter "rustdesk-*-x86_64.exe" | Select-Object -First 1
-          if (-not $exe) { Write-Error "Nenhum exe x86_64 encontrado no release ${{ inputs.fork_tag }}"; exit 1 }
-          Move-Item -Force $exe.FullName rustdesk.exe
-          Write-Host "Usando build do fork: $($exe.Name)"
+          gh release download "${{ inputs.fork_tag }}" --repo ${{ github.repository }} --pattern "rustdesk-*-x86_64.msi" --dir .
+          $msi = Get-ChildItem -Filter "rustdesk-*-x86_64.msi" | Select-Object -First 1
+          if (-not $msi) { Write-Error "Nenhum msi x86_64 encontrado no release ${{ inputs.fork_tag }}"; exit 1 }
+          Write-Host "Usando build do fork: $($msi.Name)"
+          & .github\scripts\extract-rustdesk-msi.ps1 -MsiPath $msi.FullName
 
       - name: Download RustDesk binary (oficial, sem nosso rebrand de código)
         if: ${{ inputs.fork_tag == '' }}
         shell: pwsh
         run: |
           $version = "1.3.8"
-          $url = "https://github.com/rustdesk/rustdesk/releases/download/$version/rustdesk-$version-x86_64.exe"
+          $url = "https://github.com/rustdesk/rustdesk/releases/download/$version/rustdesk-$version-x86_64.msi"
           Write-Host "Downloading RustDesk $version..."
-          Invoke-WebRequest -Uri $url -OutFile "rustdesk.exe" -UseBasicParsing
-          Write-Host "Download complete: $(Get-Item rustdesk.exe | Select-Object -ExpandProperty Length) bytes"
+          Invoke-WebRequest -Uri $url -OutFile "rustdesk.msi" -UseBasicParsing
+          & .github\scripts\extract-rustdesk-msi.ps1 -MsiPath "$PWD\rustdesk.msi"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4

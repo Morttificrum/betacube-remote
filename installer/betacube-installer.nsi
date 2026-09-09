@@ -47,11 +47,20 @@ UninstPage instfiles
 Section "Instalar ${APP_NAME}" SecMain
   SetOutPath "$INSTDIR"
 
+  ; O payload em ..\rdpayload é a build "crua" do Flutter extraída do MSI
+  ; oficial via msiexec /a (ver .github\scripts\extract-rustdesk-msi.ps1) --
+  ; RustDesk.exe pequeno + DLLs ao lado + data\/drivers\/usbmmidd_v2\. Isso
+  ; substitui o antigo esquema de extrair só "rustdesk.exe" (o .exe portátil
+  ; do release), que era um stub autoextraível que sempre rodava a partir de
+  ; %LOCALAPPDATA%\rustdesk (hardcoded) e nunca respeitava nosso APP_NAME --
+  ; causa raiz real do "instala sem erro mas não abre nada".
+  ;
   ; ${APP_EXE} agora tem espaço ("Beta Cube Remote.exe") -- a aspa tem que
   ; envolver o argumento /oname=... INTEIRO (prefixo incluso), não só o
   ; valor depois do "=": `/oname="valor"` quebra o parser do NSIS (erro de
   ; "Usage: File..."), o certo é `"/oname=valor"`.
-  File "/oname=${APP_EXE}" "..\rustdesk.exe"
+  File "/oname=${APP_EXE}" "..\rdpayload\RustDesk.exe"
+  File /r /x "RustDesk.exe" "..\rdpayload\*.*"
   File "..\hwsensor-helper.exe"
 
   ; O nome da pasta/arquivo de config é derivado de APP_NAME em tempo de
