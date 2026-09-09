@@ -6,7 +6,15 @@
 !define APP_VERSION "1.0.0"
 !define APP_PUBLISHER "Beta Cube Soluções em TI"
 !define APP_URL "https://betacube.com.br"
-!define APP_EXE "betacube-remote.exe"
+; TEM QUE bater exatamente com "{app_name}.exe" que o próprio RustDesk usa
+; internamente (src/platform/windows.rs: get_install_info_with_subkey monta
+; `exe = format!("{}\{}.exe", path, get_app_name())`, e rename_exe_cmd RENOMEIA
+; o exe em disco pra esse nome se não bater -- com "betacube-remote.exe"
+; (hífen, sem espaço) isso nunca batia, o --install (chamado abaixo)
+; renomeava o exe por baixo dos panos e os atalhos/registro do NSIS ficavam
+; órfãos, apontando pro nome antigo. É por isso que a instalação "terminava
+; sem erro" mas o atalho não abria nada.
+!define APP_EXE "${APP_NAME}.exe"
 !define RUSTDESK_SERVER "140.238.184.251"
 !define RUSTDESK_KEY "YcoVB4h1Ldi08DJmV4X1Yk7u0gi0yQFmqCgbLwZ9wsk="
 !define INSTALL_DIR "$PROGRAMFILES64\${APP_NAME}"
@@ -39,25 +47,10 @@ UninstPage instfiles
 Section "Instalar ${APP_NAME}" SecMain
   SetOutPath "$INSTDIR"
 
-  File /oname=${APP_EXE} "..\rustdesk.exe"
+  ; /oname= precisa de aspas -- ${APP_EXE} agora tem espaço ("Beta Cube
+  ; Remote.exe"), sem aspas o NSIS quebraria isso em tokens separados.
+  File /oname="${APP_EXE}" "..\rustdesk.exe"
   File "..\hwsensor-helper.exe"
-
-  CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
-
-  CreateDirectory "$SMPROGRAMS\${APP_NAME}"
-  CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
-  CreateShortcut "$SMPROGRAMS\${APP_NAME}\Desinstalar ${APP_NAME}.lnk" "$INSTDIR\uninstall.exe"
-
-  WriteRegStr HKLM "${UNINSTALL_REG}" "DisplayName" "${APP_NAME}"
-  WriteRegStr HKLM "${UNINSTALL_REG}" "DisplayVersion" "${APP_VERSION}"
-  WriteRegStr HKLM "${UNINSTALL_REG}" "Publisher" "${APP_PUBLISHER}"
-  WriteRegStr HKLM "${UNINSTALL_REG}" "URLInfoAbout" "${APP_URL}"
-  WriteRegStr HKLM "${UNINSTALL_REG}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKLM "${UNINSTALL_REG}" "UninstallString" "$INSTDIR\uninstall.exe"
-  WriteRegDWORD HKLM "${UNINSTALL_REG}" "NoModify" 1
-  WriteRegDWORD HKLM "${UNINSTALL_REG}" "NoRepair" 1
-
-  WriteUninstaller "$INSTDIR\uninstall.exe"
 
   ; O nome da pasta/arquivo de config é derivado de APP_NAME em tempo de
   ; execução (hbb_common::config::APP_NAME, setado em src/common.rs::global_init).
@@ -79,19 +72,47 @@ Section "Instalar ${APP_NAME}" SecMain
 !endif
   FileClose $0
 
+  ; O --install é o auto-instalador completo do próprio RustDesk (serviço,
+  ; driver de impressora, atalhos e registro de desinstalação PRÓPRIOS,
+  ; independentes do NSIS -- ver src/platform/windows.rs::install_me). Roda
+  ; ANTES dos nossos CreateShortcut/WriteRegStr/WriteUninstaller de propósito:
+  ; ele grava um UninstallString apontando pra si mesmo, e os passos abaixo
+  ; sobrescrevem isso de novo pro nosso uninstall.exe (que sabe limpar o
+  ; hwsensor-helper.exe e a pasta de Menu Iniciar que só o NSIS criou).
   ExecWait '"$INSTDIR\${APP_EXE}" --install'
+
+  CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
+
+  CreateDirectory "$SMPROGRAMS\${APP_NAME}"
+  CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
+  CreateShortcut "$SMPROGRAMS\${APP_NAME}\Desinstalar ${APP_NAME}.lnk" "$INSTDIR\uninstall.exe"
+
+  WriteRegStr HKLM "${UNINSTALL_REG}" "DisplayName" "${APP_NAME}"
+  WriteRegStr HKLM "${UNINSTALL_REG}" "DisplayVersion" "${APP_VERSION}"
+  WriteRegStr HKLM "${UNINSTALL_REG}" "Publisher" "${APP_PUBLISHER}"
+  WriteRegStr HKLM "${UNINSTALL_REG}" "URLInfoAbout" "${APP_URL}"
+  WriteRegStr HKLM "${UNINSTALL_REG}" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKLM "${UNINSTALL_REG}" "UninstallString" "$INSTDIR\uninstall.exe"
+  WriteRegDWORD HKLM "${UNINSTALL_REG}" "NoModify" 1
+  WriteRegDWORD HKLM "${UNINSTALL_REG}" "NoRepair" 1
+
+  WriteUninstaller "$INSTDIR\uninstall.exe"
 
   MessageBox MB_OK "Beta Cube Remote instalado com sucesso!$\n$\nO acesso remoto Beta Cube esta pronto.$\nAbra o app e passe o ID para a equipe."
 SectionEnd
 
 Section "Uninstall"
+  ; --uninstall primeiro (para o serviço, mata o processo, remove driver de
+  ; impressora/associação de arquivo -- get_before_uninstall em windows.rs),
+  ; DEPOIS o NSIS limpa o que sobrar.
   ExecWait '"$INSTDIR\${APP_EXE}" --uninstall'
   Sleep 2000
 
-  Delete "$INSTDIR\${APP_EXE}"
-  Delete "$INSTDIR\hwsensor-helper.exe"
-  Delete "$INSTDIR\uninstall.exe"
-  RMDir "$INSTDIR"
+  ; /r (recursivo) porque o --install do RustDesk cria arquivos/pastas
+  ; próprios dentro de $INSTDIR (data/, drivers/, usbmmidd_v2/, o atalho de
+  ; desinstalação dele, etc.) que a gente não lista aqui -- RMDir sem /r
+  ; falha silenciosamente se a pasta não estiver vazia, deixando lixo pra trás.
+  RMDir /r "$INSTDIR"
 
   Delete "$DESKTOP\${APP_NAME}.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
