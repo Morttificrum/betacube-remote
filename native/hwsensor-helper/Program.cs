@@ -50,12 +50,15 @@ public static class Program
     // Só os tipos relevantes pro que a Fase 3 pede (temp/voltagem/fan/uso) —
     // LibreHardwareMonitor devolve dezenas de sensores extras (clocks, D3D,
     // throughput de barramento, etc.) que só inflariam o payload à toa.
+    // Level cobre "Remaining Life"/vida útil de SSD, usado no alerta crítico
+    // de SMART.
     private static readonly HashSet<SensorType> RelevantTypes = new()
     {
         SensorType.Temperature,
         SensorType.Voltage,
         SensorType.Fan,
         SensorType.Load,
+        SensorType.Level,
     };
 
     private static void CollectSensors(IHardware hardware, List<object> readings)

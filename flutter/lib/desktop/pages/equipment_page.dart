@@ -124,26 +124,49 @@ class _EquipmentRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasAgent = item.hasAgent;
-    return ListTile(
-      leading: Icon(
-        Icons.computer,
-        color: !hasAgent
-            ? Theme.of(context).disabledColor
-            : (item.online ? Colors.green : Colors.grey),
+    // Não usa ListTile(onTap: ..., trailing: ElevatedButton(...)) -- os dois
+    // entram na mesma arena de gestos do Flutter e o toque na linha acaba
+    // sempre resolvendo pro botão do trailing, mesmo clicando fora dele.
+    // Estrutura explícita (InkWell só na parte não-botão + botão separado
+    // fora dele) evita essa ambiguidade.
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: hasAgent ? () => showEquipmentDetailDialog(context, item) : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            children: [
+              Icon(
+                Icons.computer,
+                color: !hasAgent
+                    ? Theme.of(context).disabledColor
+                    : (item.online ? Colors.green : Colors.grey),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(item.hostname),
+                    Text(
+                      hasAgent
+                          ? (item.online ? translate('Online') : translate('Offline'))
+                          : translate('No Beta Cube Remote installed'),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              if (hasAgent)
+                ElevatedButton(
+                  onPressed: () => connect(context, item.rustdeskId!),
+                  child: Text(translate('Connect')),
+                ),
+            ],
+          ),
+        ),
       ),
-      title: Text(item.hostname),
-      subtitle: Text(
-        hasAgent
-            ? (item.online ? translate('Online') : translate('Offline'))
-            : translate('No Beta Cube Remote installed'),
-      ),
-      trailing: hasAgent
-          ? ElevatedButton(
-              onPressed: () => connect(context, item.rustdeskId!),
-              child: Text(translate('Connect')),
-            )
-          : null,
-      onTap: hasAgent ? () => showEquipmentDetailDialog(context, item) : null,
     );
   }
 }
