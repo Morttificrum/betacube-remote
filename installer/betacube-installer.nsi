@@ -45,15 +45,34 @@ UninstPage uninstConfirm
 UninstPage instfiles
 
 Section "Instalar ${APP_NAME}" SecMain
-  SetOutPath "$INSTDIR"
+  ; NAO extrai direto em $INSTDIR -- ver get_uninstall() em
+  ; src/platform/windows.rs: "if exist "{path}" rd /s /q "{path}"" roda
+  ; INCONDICIONALMENTE (nao depende do registro) no INICIO de todo
+  ; --install, apagando o diretorio de instalacao inteiro antes de
+  ; recopiar a partir de onde o exe atual esta rodando (current_exe()).
+  ; Se a gente extrai tudo direto em $INSTDIR e roda o exe de la, essa
+  ; limpeza apaga TUDO que acabamos de colocar -- inclusive o proprio exe
+  ; em execucao -- e o XCOPY de repopulacao que vem depois (copy_exe_cmd,
+  ; a partir do current_exe(), que agora e um caminho fantasma) falha
+  ; silenciosamente pra boa parte dos arquivos. Foi essa a causa raiz real
+  ; do "instala mas fica com pasta incompleta / janela em branco".
+  ;
+  ; Em vez disso: extrai pra uma pasta TEMPORARIA separada e roda o
+  ; --install a partir dela -- exatamente como o design original do
+  ; RustDesk espera (o .exe portatil faz a mesma coisa, só que a partir de
+  ; %LOCALAPPDATA%\rustdesk). Assim, quando get_uninstall() checa
+  ; "if exist $INSTDIR", ainda nao existe nada la (rd /s /q vira no-op), e
+  ; o XCOPY interno do install_me() copia tudo certinho a partir da pasta
+  ; temp intacta.
+  !define TEMP_SRC "$TEMP\BetaCubeRemoteInstallSrc"
+  SetOutPath "${TEMP_SRC}"
 
   ; O payload em ..\rdpayload é a build "crua" do Flutter extraída do MSI
   ; oficial via msiexec /a (ver .github\scripts\extract-rustdesk-msi.ps1) --
   ; RustDesk.exe pequeno + DLLs ao lado + data\/drivers\/usbmmidd_v2\. Isso
   ; substitui o antigo esquema de extrair só "rustdesk.exe" (o .exe portátil
   ; do release), que era um stub autoextraível que sempre rodava a partir de
-  ; %LOCALAPPDATA%\rustdesk (hardcoded) e nunca respeitava nosso APP_NAME --
-  ; causa raiz real do "instala sem erro mas não abre nada".
+  ; %LOCALAPPDATA%\rustdesk (hardcoded) e nunca respeitava nosso APP_NAME.
   ;
   ; ${APP_EXE} agora tem espaço ("Beta Cube Remote.exe") -- a aspa tem que
   ; envolver o argumento /oname=... INTEIRO (prefixo incluso), não só o
@@ -86,11 +105,12 @@ Section "Instalar ${APP_NAME}" SecMain
   ; O --install é o auto-instalador completo do próprio RustDesk (serviço,
   ; driver de impressora, atalhos e registro de desinstalação PRÓPRIOS,
   ; independentes do NSIS -- ver src/platform/windows.rs::install_me). Roda
-  ; ANTES dos nossos CreateShortcut/WriteRegStr/WriteUninstaller de propósito:
-  ; ele grava um UninstallString apontando pra si mesmo, e os passos abaixo
-  ; sobrescrevem isso de novo pro nosso uninstall.exe (que sabe limpar o
-  ; hwsensor-helper.exe e a pasta de Menu Iniciar que só o NSIS criou).
-  ExecWait '"$INSTDIR\${APP_EXE}" --install'
+  ; a partir da pasta TEMP (ver comentário lá acima), não de $INSTDIR.
+  ; Roda ANTES dos nossos CreateShortcut/WriteRegStr/WriteUninstaller de
+  ; propósito: ele grava um UninstallString apontando pra si mesmo, e os
+  ; passos abaixo sobrescrevem isso de novo pro nosso uninstall.exe.
+  ExecWait '"${TEMP_SRC}\${APP_EXE}" --install'
+  RMDir /r "${TEMP_SRC}"
 
   CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
 
