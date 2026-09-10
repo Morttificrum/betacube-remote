@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../../common.dart';
@@ -39,10 +41,14 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
   List<dynamic> _driverIssues = [];
   String? _lastActionMessage;
 
+  bool _historyLoading = false;
+  List<Map<String, dynamic>> _commandHistory = [];
+
   @override
   void initState() {
     super.initState();
     _load();
+    _loadHistory();
   }
 
   Future<void> _load() async {
@@ -57,6 +63,21 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
     });
   }
 
+  /// Histórico de comandos (Ações Rápidas) já enviados pra essa máquina --
+  /// sem isso não tinha como saber se um comando rodou de verdade sem
+  /// confiar cegamente no "enviado" instantâneo.
+  Future<void> _loadHistory() async {
+    final rustdeskId = widget.item.rustdeskId;
+    if (rustdeskId == null || rustdeskId.isEmpty) return;
+    setState(() => _historyLoading = true);
+    final history = await gFFI.equipmentModel.listCommands(rustdeskId);
+    if (!mounted) return;
+    setState(() {
+      _historyLoading = false;
+      _commandHistory = history;
+    });
+  }
+
   Future<void> _runAction(String action, {Map<String, dynamic>? params, String? label}) async {
     final id = await gFFI.equipmentModel.enqueueCommand(widget.item.rustdeskId!, action, params);
     if (!mounted) return;
@@ -65,6 +86,10 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
           ? '${label ?? action}: ${translate("enviado, deve executar no próximo contato da máquina")}'
           : '${label ?? action}: ${translate("falha ao enviar comando")}';
     });
+    // O comando novo já aparece no histórico como "pending" -- o técnico
+    // pode abrir o histórico de novo depois (botão de atualizar) pra ver
+    // quando virar "done"/"failed", sem precisar fechar e reabrir o painel.
+    _loadHistory();
   }
 
   void _runSensitiveAction(String action, String label) {
@@ -147,7 +172,118 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
             padding: const EdgeInsets.only(top: 8),
             child: Text(_lastActionMessage!, style: const TextStyle(fontStyle: FontStyle.italic)),
           ),
+        const SizedBox(height: 12),
+        _buildCommandHistory(),
       ],
+    );
+  }
+
+  Widget _buildCommandHistory() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(translate('Command history'), style: const TextStyle(fontWeight: FontWeight.bold)),
+            const Spacer(),
+            IconButton(
+              icon: const Icon(Icons.refresh, size: 18),
+              tooltip: translate('Refresh'),
+              onPressed: _historyLoading ? null : _loadHistory,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        if (_historyLoading) const LinearProgressIndicator(),
+        if (!_historyLoading && _commandHistory.isEmpty) Text(translate('Empty')),
+        if (_commandHistory.isNotEmpty)
+          SizedBox(
+            height: 180,
+            child: ListView.separated(
+              itemCount: _commandHistory.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (ctx, i) => _commandHistoryTile(_commandHistory[i]),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _commandHistoryTile(Map<String, dynamic> cmd) {
+    final status = cmd['status']?.toString() ?? '';
+    final action = cmd['action']?.toString() ?? '';
+    final createdAt = (cmd['created_at'] as num?)?.toDouble();
+    Color color;
+    switch (status) {
+      case 'done':
+        color = Colors.green;
+        break;
+      case 'failed':
+        color = Colors.red;
+        break;
+      case 'sent':
+        color = Colors.blue;
+        break;
+      default:
+        color = Colors.grey;
+    }
+    return ListTile(
+      dense: true,
+      visualDensity: VisualDensity.compact,
+      leading: Icon(Icons.circle, size: 10, color: color),
+      title: Text(action, style: const TextStyle(fontSize: 13)),
+      subtitle: Text(
+        createdAt != null ? '$status · ${_relativeTime(createdAt)}' : status,
+        style: const TextStyle(fontSize: 11),
+      ),
+      onTap: () => _showCommandResult(cmd),
+    );
+  }
+
+  String _relativeTime(double epochSeconds) {
+    final dt = DateTime.fromMillisecondsSinceEpoch((epochSeconds * 1000).round());
+    final diff = DateTime.now().difference(dt);
+    if (diff.inSeconds < 60) return '${diff.inSeconds}s';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}min';
+    if (diff.inHours < 24) return '${diff.inHours}h';
+    return '${diff.inDays}d';
+  }
+
+  void _showCommandResult(Map<String, dynamic> cmd) {
+    String body = translate('No result yet');
+    final resultJson = cmd['result_json'] as String?;
+    if (resultJson != null && resultJson.trim().isNotEmpty && resultJson.trim() != '{}') {
+      try {
+        final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
+        final buffer = StringBuffer();
+        final stdout = parsed['stdout']?.toString() ?? '';
+        final stderr = parsed['stderr']?.toString() ?? '';
+        final error = parsed['error']?.toString() ?? '';
+        if (stdout.isNotEmpty) buffer.writeln(stdout);
+        if (stderr.isNotEmpty) {
+          if (buffer.isNotEmpty) buffer.writeln('--- stderr ---');
+          buffer.writeln(stderr);
+        }
+        if (error.isNotEmpty) buffer.writeln('Erro: $error');
+        body = buffer.isEmpty ? jsonEncode(parsed) : buffer.toString();
+      } catch (_) {
+        body = resultJson;
+      }
+    }
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('${cmd['action']} (${cmd['status']})'),
+        content: SizedBox(
+          width: 520,
+          child: SingleChildScrollView(child: SelectableText(body)),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: Text(translate('Close'))),
+        ],
+      ),
     );
   }
 

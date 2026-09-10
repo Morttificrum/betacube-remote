@@ -93,8 +93,8 @@ fn run_capture(program: &str, args: &[&str]) -> (String, Value) {
         .output()
     {
         Ok(out) => {
-            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            let stdout = decode_console_bytes(&out.stdout);
+            let stderr = decode_console_bytes(&out.stderr);
             let status = if out.status.success() { "done" } else { "failed" };
             (
                 status.to_owned(),
@@ -103,6 +103,29 @@ fn run_capture(program: &str, args: &[&str]) -> (String, Value) {
         }
         Err(e) => ("failed".to_owned(), json!({"error": e.to_string()})),
     }
+}
+
+/// Ferramentas de console nativas do Windows (sfc, chkdsk, alguns `cmd`)
+/// escrevem a saída em UTF-16LE quando o stdout é redirecionado, sem BOM
+/// -- decodificar isso como UTF-8 (que era o que fazíamos antes) produz um
+/// texto com bytes nulos intercalados, tecnicamente "lossy-válido" mas
+/// ilegível. Heurística: se metade ou mais dos bytes em posição ímpar (nos
+/// primeiros bytes da saída) forem 0x00, é UTF-16LE puro ASCII/Latin-1 --
+/// decodifica como tal. Ferramentas que já mandam UTF-8 normal (a maioria,
+/// inclusive tudo que passa por `run_powershell`) não batem nesse padrão e
+/// caem no fallback de sempre.
+#[cfg(windows)]
+fn decode_console_bytes(bytes: &[u8]) -> String {
+    if bytes.len() >= 4 && bytes.len() % 2 == 0 {
+        let sample_len = bytes.len().min(64);
+        let odd_zero_count = bytes[..sample_len].iter().skip(1).step_by(2).filter(|&&b| b == 0).count();
+        let odd_total = sample_len / 2;
+        if odd_total > 0 && odd_zero_count * 4 >= odd_total * 3 {
+            let u16s: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            return String::from_utf16_lossy(&u16s);
+        }
+    }
+    String::from_utf8_lossy(bytes).to_string()
 }
 
 #[cfg(windows)]

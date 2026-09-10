@@ -147,6 +147,22 @@ class EquipmentModel {
     }
   }
 
+  /// Histórico de Ações Rápidas já enfileiradas pro device (mais recente
+  /// primeiro) -- pra saber se um comando realmente rodou e o que
+  /// aconteceu, sem precisar confiar cegamente no "enviado" instantâneo.
+  Future<List<Map<String, dynamic>>> listCommands(String rustdeskId, {int limit = 20}) async {
+    final api = await bind.mainGetApiServer();
+    if (api.isEmpty) return [];
+    try {
+      final resp = await http.get(Uri.parse('$api/internal/commands?rustdesk_id=$rustdeskId&limit=$limit'));
+      if (resp.statusCode != 200) return [];
+      final List list = jsonDecode(resp.body);
+      return list.cast<Map<String, dynamic>>();
+    } catch (_) {
+      return [];
+    }
+  }
+
   /// Enfileira uma Ação Rápida pro device — executa no próximo contato
   /// (heartbeat) da máquina com o bridge, não é instantâneo. Devolve o id
   /// do comando, ou null se não deu pra enfileirar.
