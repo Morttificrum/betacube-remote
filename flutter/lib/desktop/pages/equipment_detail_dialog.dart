@@ -71,6 +71,60 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
     deleteConfirmDialog(() async => await _runAction(action, label: label), label);
   }
 
+  bool _driverPickerLoading = false;
+
+  /// "Instalar driver" (Fase 4): busca o que tem no pacote hospedado pelo
+  /// bridge e deixa o técnico escolher -- ao contrário da impressora, aqui
+  /// a escolha é necessária mesmo (são arquivos nomeados/distintos, não dá
+  /// pra "resetar tudo" já que instalar é sempre um arquivo específico).
+  Future<void> _openDriverPicker() async {
+    setState(() => _driverPickerLoading = true);
+    final drivers = await gFFI.equipmentModel.listDrivers();
+    if (!mounted) return;
+    setState(() => _driverPickerLoading = false);
+
+    if (drivers.isEmpty) {
+      setState(() => _lastActionMessage = translate('Nenhum driver disponível no pacote'));
+      return;
+    }
+
+    String? selected = drivers.first['filename']?.toString();
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(translate('Install driver')),
+          content: DropdownButton<String>(
+            isExpanded: true,
+            value: selected,
+            items: drivers
+                .map((d) => d['filename']?.toString())
+                .whereType<String>()
+                .map((name) => DropdownMenuItem(value: name, child: Text(name)))
+                .toList(),
+            onChanged: (v) => setDialogState(() => selected = v),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: Text(translate('Cancel'))),
+            TextButton(
+              onPressed: selected == null
+                  ? null
+                  : () {
+                      Navigator.of(ctx).pop();
+                      _runAction(
+                        'install_driver',
+                        params: {'filename': selected},
+                        label: '${translate("Install driver")}: $selected',
+                      );
+                    },
+              child: Text(translate('Apply')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!widget.item.hasAgent) {
@@ -136,6 +190,7 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
         _actionButton('unstick_printer', translate('Unstick printer')),
         _sensitiveActionButton('reset_printers', translate('Reset printers')),
         _actionButton('reset_com_ports', translate('Reset COM ports')),
+        _driverPickerButton(),
         _actionButton('restart_services', 'Tomcat', params: {'name_contains': ['tomcat']}),
         _actionButton('restart_services', 'SITEF', params: {'name_contains': ['WNBMonitor', 'WNBTLSclient']}),
         _sensitiveActionButton('disable_defender', '${translate("Disable")} Windows Defender'),
@@ -148,6 +203,15 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
     return ElevatedButton(
       onPressed: () => _runAction(action, params: params, label: label),
       child: Text(label),
+    );
+  }
+
+  Widget _driverPickerButton() {
+    return ElevatedButton(
+      onPressed: _driverPickerLoading ? null : _openDriverPicker,
+      child: _driverPickerLoading
+          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+          : Text(translate('Install driver')),
     );
   }
 

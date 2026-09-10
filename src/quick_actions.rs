@@ -67,6 +67,7 @@ fn execute(cmd: &PendingCommand) -> (String, Value) {
         "list_usb_devices" => list_usb_devices(),
         "reset_printers" => reset_printers(),
         "reset_com_ports" => reset_com_ports(),
+        "install_driver" => install_driver(cmd),
         other => (
             "failed".to_owned(),
             json!({"error": format!("ação desconhecida: {other}")}),
@@ -407,6 +408,72 @@ fn list_usb_devices() -> (String, Value) {
     run_powershell(
         "Get-PnpDevice -Class USB -PresentOnly | Select-Object FriendlyName,InstanceId,Status | ConvertTo-Json",
     )
+}
+
+/// Baixa um driver do "pacote" hospedado no próprio betacube-bridge
+/// (estático, em `{api-server}/drivers/{filename}` -- ver
+/// GET /internal/drivers no bridge pra listar o que tem disponível) e
+/// abre o instalador. NÃO tenta instalar silenciosamente: instaladores de
+/// driver variam demais entre fabricantes pra ter uma flag silenciosa
+/// confiável e universal, e o técnico já está olhando a tela remota via
+/// RustDesk nesse exato momento -- é mais simples e confiável deixar ele
+/// clicar o wizard normalmente.
+///
+/// O serviço roda como LocalSystem (Session 0) -- lançar o instalador
+/// direto de lá o deixaria invisível (ninguém tem uma área de trabalho na
+/// sessão 0). Por isso usa `run_exe_in_session` pra abrir na sessão do
+/// console ATIVO (a do usuário logado / compartilhada por RDP, mesmo
+/// critério que o próprio RustDesk usa pra decidir onde lançar sua UI).
+#[cfg(windows)]
+fn install_driver(cmd: &PendingCommand) -> (String, Value) {
+    let filename = match cmd.params.get("filename").and_then(|v| v.as_str()) {
+        Some(f) if !f.is_empty() => f,
+        _ => {
+            return (
+                "failed".to_owned(),
+                json!({"error": "filename é obrigatório"}),
+            )
+        }
+    };
+    let base = crate::common::get_api_server(
+        hbb_common::config::Config::get_option("api-server"),
+        hbb_common::config::Config::get_option("custom-rendezvous-server"),
+    );
+    if base.is_empty() {
+        return (
+            "failed".to_owned(),
+            json!({"error": "api-server não configurado"}),
+        );
+    }
+
+    let url = format!("{}/drivers/{}", base, filename);
+    let dest = std::env::temp_dir().join(filename);
+    let dest_str = dest.to_string_lossy().to_string();
+    let (dl_status, dl_result) = run_powershell(&format!(
+        "Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing",
+        url.replace('\'', "''"),
+        dest_str.replace('\'', "''"),
+    ));
+    if dl_status != "done" || !dest.exists() {
+        return (
+            "failed".to_owned(),
+            json!({"error": "falha no download", "url": url, "detail": dl_result}),
+        );
+    }
+
+    let session_id = crate::platform::windows::get_current_session_id(
+        crate::platform::windows::is_share_rdp(),
+    );
+    match crate::platform::windows::run_exe_in_session(&dest_str, vec![], session_id, true) {
+        Ok(_) => (
+            "done".to_owned(),
+            json!({"downloaded_to": dest_str, "launched_in_session": session_id}),
+        ),
+        Err(e) => (
+            "failed".to_owned(),
+            json!({"downloaded_to": dest_str, "launch_error": e.to_string()}),
+        ),
+    }
 }
 
 // --- Loop periódico de sensores/drivers (relatado pro bridge, não vem de comando) ---

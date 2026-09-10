@@ -131,6 +131,22 @@ class EquipmentModel {
     }
   }
 
+  /// Lista os instaladores de driver disponíveis no pacote hospedado pelo
+  /// bridge (Fase 4) — devolve [] em caso de erro, nunca null (o botão
+  /// que chama isso já trata lista vazia como "nada disponível").
+  Future<List<Map<String, dynamic>>> listDrivers() async {
+    final api = await bind.mainGetApiServer();
+    if (api.isEmpty) return [];
+    try {
+      final resp = await http.get(Uri.parse('$api/internal/drivers'));
+      if (resp.statusCode != 200) return [];
+      final List list = jsonDecode(resp.body);
+      return list.cast<Map<String, dynamic>>();
+    } catch (_) {
+      return [];
+    }
+  }
+
   /// Enfileira uma Ação Rápida pro device — executa no próximo contato
   /// (heartbeat) da máquina com o bridge, não é instantâneo. Devolve o id
   /// do comando, ou null se não deu pra enfileirar.
