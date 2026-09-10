@@ -119,6 +119,8 @@ winapi = { version = "0.3", features = [
     "cfgmgr32",
     "ioapiset",
     "winspool",
+    "winnls",
+    "stringapiset",
 ] }
 windows = { version = "0.61", features = [
     "Win32",

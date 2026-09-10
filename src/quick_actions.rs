@@ -105,15 +105,28 @@ fn run_capture(program: &str, args: &[&str]) -> (String, Value) {
     }
 }
 
-/// Ferramentas de console nativas do Windows (sfc, chkdsk, alguns `cmd`)
-/// escrevem a saída em UTF-16LE quando o stdout é redirecionado, sem BOM
-/// -- decodificar isso como UTF-8 (que era o que fazíamos antes) produz um
-/// texto com bytes nulos intercalados, tecnicamente "lossy-válido" mas
-/// ilegível. Heurística: se metade ou mais dos bytes em posição ímpar (nos
-/// primeiros bytes da saída) forem 0x00, é UTF-16LE puro ASCII/Latin-1 --
-/// decodifica como tal. Ferramentas que já mandam UTF-8 normal (a maioria,
-/// inclusive tudo que passa por `run_powershell`) não batem nesse padrão e
-/// caem no fallback de sempre.
+/// Ferramentas de console nativas do Windows não são consistentes na
+/// codificação da saída quando o stdout é redirecionado (nosso caso, via
+/// `Command::output()`) -- três casos reais encontrados testando de
+/// verdade (via GET /internal/commands no bridge):
+///
+/// 1. `sfc /scannow`: UTF-16LE puro, sem BOM. Decodificar como UTF-8
+///    (o que a gente fazia antes) produz bytes nulos intercalados --
+///    tecnicamente "lossy-válido", mas ilegível.
+/// 2. `DISM`: UTF-8 real na maior parte, mas mistura com bytes na code
+///    page OEM ativa em alguns trechos (barra de progresso ficava certa,
+///    só as palavras acentuadas viravam "�").
+/// 3. Praticamente tudo que passa por `run_powershell` já sai em UTF-8
+///    direto.
+///
+/// Por isso tenta em cascata: heurística de UTF-16LE (bytes em posição
+/// ímpar majoritariamente 0x00) primeiro; se não bater, tenta UTF-8
+/// estrito; se isso falhar (tem byte que não fecha uma sequência UTF-8
+/// válida -- exatamente o sintoma do DISM), decodifica via
+/// `MultiByteToWideChar`/`GetOEMCP` (API nativa do Windows) usando a code
+/// page OEM ATIVA da máquina, em vez de chutar um número fixo (a code
+/// page OEM varia por idioma/região -- não dá pra hardcodar 850/860 e
+/// funcionar em qualquer instalação).
 #[cfg(windows)]
 fn decode_console_bytes(bytes: &[u8]) -> String {
     if bytes.len() >= 4 && bytes.len() % 2 == 0 {
@@ -125,7 +138,46 @@ fn decode_console_bytes(bytes: &[u8]) -> String {
             return String::from_utf16_lossy(&u16s);
         }
     }
-    String::from_utf8_lossy(bytes).to_string()
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return s.to_owned();
+    }
+    decode_oem_codepage(bytes).unwrap_or_else(|| String::from_utf8_lossy(bytes).to_string())
+}
+
+#[cfg(windows)]
+fn decode_oem_codepage(bytes: &[u8]) -> Option<String> {
+    use winapi::um::stringapiset::MultiByteToWideChar;
+    use winapi::um::winnls::GetOEMCP;
+    if bytes.is_empty() {
+        return Some(String::new());
+    }
+    unsafe {
+        let cp = GetOEMCP();
+        let wide_len = MultiByteToWideChar(
+            cp,
+            0,
+            bytes.as_ptr() as *const i8,
+            bytes.len() as i32,
+            std::ptr::null_mut(),
+            0,
+        );
+        if wide_len <= 0 {
+            return None;
+        }
+        let mut wide: Vec<u16> = vec![0; wide_len as usize];
+        let written = MultiByteToWideChar(
+            cp,
+            0,
+            bytes.as_ptr() as *const i8,
+            bytes.len() as i32,
+            wide.as_mut_ptr(),
+            wide_len,
+        );
+        if written <= 0 {
+            return None;
+        }
+        Some(String::from_utf16_lossy(&wide))
+    }
 }
 
 #[cfg(windows)]
