@@ -468,14 +468,15 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           await rustDeskWinManager.closeAllSubWindows();
           bind.mainGotoInstall();
         });
-      } else if (bind.mainIsInstalledLowerVersion()) {
-        return buildInstallCard(
-            "Status", "Your installation is lower version.", "Click to upgrade",
-            () async {
-          await rustDeskWinManager.closeAllSubWindows();
-          bind.mainUpdateMe();
-        });
       }
+      // "installed lower version" (mainIsInstalledLowerVersion) removido de
+      // propósito: compara a data de build do exe rodando com o BuildDate
+      // gravado no registro na última instalação -- em máquinas que já
+      // passaram por vários reinstalls de teste com builds diferentes, esse
+      // valor fica dessincronizado e o card aparece incorretamente. O botão
+      // "Click to upgrade" chamava mainUpdateMe() (auto-update interno do
+      // RustDesk, nunca testado/validado no nosso instalador) -- risco maior
+      // que benefício pra um app que já é atualizado via reinstalação normal.
     } else if (isMacOS) {
       final isOutgoingOnly = bind.isOutgoingOnly();
       if (!(isOutgoingOnly || bind.mainIsCanScreenRecording(prompt: false))) {
