@@ -65,6 +65,8 @@ fn execute(cmd: &PendingCommand) -> (String, Value) {
         "disable_firewall" => disable_firewall(),
         "list_driver_issues" => list_driver_issues(),
         "list_usb_devices" => list_usb_devices(),
+        "list_printer_drivers" => list_printer_drivers(),
+        "set_printer_driver" => set_printer_driver(cmd),
         other => (
             "failed".to_owned(),
             json!({"error": format!("ação desconhecida: {other}")}),
@@ -343,9 +345,55 @@ fn list_usb_devices() -> (String, Value) {
     )
 }
 
+/// "Destravar impressora" não trava mais só em limpar a fila -- cada loja
+/// tem um driver de impressora diferente instalado (sem padrão fixo pra
+/// automatizar a escolha), então a Ação Rápida aqui é só LISTAR o que já
+/// está instalado + qual driver cada impressora está usando agora, pro
+/// técnico decidir no Flutter (ver equipment_detail_dialog.dart) qual
+/// impressora/driver precisa de intervenção.
+#[cfg(windows)]
+fn list_printer_drivers() -> (String, Value) {
+    run_powershell(
+        "$drivers = Get-PrinterDriver | Select-Object Name,Manufacturer,DriverVersion; \
+         $impressoras = Get-Printer | Select-Object Name,DriverName,PrinterStatus; \
+         @{drivers=$drivers; impressoras=$impressoras} | ConvertTo-Json -Compress -Depth 4",
+    )
+}
+
+/// Reatribui o driver de uma impressora já instalada (escolhida pelo
+/// técnico a partir do resultado de list_printer_drivers) -- só troca a
+/// associação impressora->driver via Set-Printer, não instala/remove
+/// nada, não toca em registro direto.
+#[cfg(windows)]
+fn set_printer_driver(cmd: &PendingCommand) -> (String, Value) {
+    let printer_name = cmd.params.get("printer_name").and_then(|v| v.as_str());
+    let driver_name = cmd.params.get("driver_name").and_then(|v| v.as_str());
+    let (printer_name, driver_name) = match (printer_name, driver_name) {
+        (Some(p), Some(d)) => (p, d),
+        _ => {
+            return (
+                "failed".to_owned(),
+                json!({"error": "printer_name e driver_name são obrigatórios"}),
+            )
+        }
+    };
+    run_powershell(&format!(
+        "Set-Printer -Name '{}' -DriverName '{}'",
+        printer_name.replace('\'', "''"),
+        driver_name.replace('\'', "''"),
+    ))
+}
+
 // --- Loop periódico de sensores/drivers (relatado pro bridge, não vem de comando) ---
 
 const SENSOR_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+// disk_health/power_health/windows_health (Fase C -- portado do BetaCube
+// Monitor, ver disk_health.py/power_health.py/windows_health.py) usam
+// Get-WinEvent/Get-Service, mais pesados que ler sensor de hardware e sem
+// necessidade da mesma cadência (nenhum desses muda em segundos) -- roda
+// só a cada N ciclos do loop rápido de 60s, não em todo tick.
+const EXTENDED_CHECK_EVERY_N_TICKS: u64 = 5; // ~5 min
 
 #[cfg(windows)]
 pub fn start_sensor_loop() {
@@ -359,6 +407,7 @@ pub fn start_sensor_loop() {}
 #[tokio::main(flavor = "current_thread")]
 async fn sensor_loop_async() {
     let mut interval = tokio::time::interval(SENSOR_REPORT_INTERVAL);
+    let mut tick: u64 = 0;
     loop {
         interval.tick().await;
         let url = crate::common::get_api_server(
@@ -370,15 +419,22 @@ async fn sensor_loop_async() {
         }
         let id = hbb_common::config::Config::get_id();
         let uuid = crate::encode64(hbb_common::get_uuid());
-        let (sensors, driver_issues) = match tokio::task::spawn_blocking(collect_sensors_and_drivers).await {
-            Ok(x) => x,
-            Err(_) => (None, None),
-        };
+        let run_extended = tick % EXTENDED_CHECK_EVERY_N_TICKS == 0;
+        tick = tick.wrapping_add(1);
+
+        let (sensors, driver_issues, disk_health, power_health, windows_health) =
+            match tokio::task::spawn_blocking(move || collect_all_signals(run_extended)).await {
+                Ok(x) => x,
+                Err(_) => (None, None, None, None, None),
+            };
         let body = json!({
             "id": id,
             "uuid": uuid,
             "sensors": sensors,
             "driver_issues": driver_issues,
+            "disk_health": disk_health,
+            "power_health": power_health,
+            "windows_health": windows_health,
         })
         .to_string();
         let sensors_url = format!("{}/api/sensors", url);
@@ -389,7 +445,9 @@ async fn sensor_loop_async() {
 }
 
 #[cfg(windows)]
-fn collect_sensors_and_drivers() -> (Option<Value>, Option<Value>) {
+fn collect_all_signals(
+    run_extended: bool,
+) -> (Option<Value>, Option<Value>, Option<Value>, Option<Value>, Option<Value>) {
     let sensors = read_hw_sensors();
     let (status, result) = list_driver_issues();
     let driver_issues = if status == "done" {
@@ -401,7 +459,127 @@ fn collect_sensors_and_drivers() -> (Option<Value>, Option<Value>) {
     } else {
         None
     };
-    (sensors, driver_issues)
+    if !run_extended {
+        return (sensors, driver_issues, None, None, None);
+    }
+    (
+        sensors,
+        driver_issues,
+        collect_disk_health(),
+        collect_power_health(),
+        collect_windows_health(),
+    )
+}
+
+/// Saúde nativa de disco via Windows Storage (sem smartctl/terceiros) --
+/// portado de disk_health.py. HealthStatus já reflete o que o firmware do
+/// disco reporta via SMART; Wear/ReadErrorsUncorrected/WriteErrorsUncorrected
+/// vêm de Get-StorageReliabilityCounter (nativo desde Windows 8/Server 2012).
+#[cfg(windows)]
+fn collect_disk_health() -> Option<Value> {
+    let (status, out) = run_powershell(
+        "$discos = Get-PhysicalDisk | Select-Object DeviceId,FriendlyName,HealthStatus,OperationalStatus,MediaType,Size; \
+         $contadores = Get-PhysicalDisk | Get-StorageReliabilityCounter -ErrorAction SilentlyContinue | \
+         Select-Object DeviceId,Wear,ReadErrorsUncorrected,WriteErrorsUncorrected,Temperature,PowerOnHours; \
+         @{discos=$discos; contadores=$contadores} | ConvertTo-Json -Compress -Depth 4",
+    );
+    if status != "done" {
+        return None;
+    }
+    let parsed: Value = out
+        .get("stdout")
+        .and_then(|s| s.as_str())
+        .and_then(|s| serde_json::from_str(s).ok())?;
+    let as_vec = |key: &str| -> Vec<Value> {
+        match parsed.get(key) {
+            Some(Value::Array(arr)) => arr.clone(),
+            Some(other) => vec![other.clone()],
+            None => Vec::new(),
+        }
+    };
+    let discos = as_vec("discos");
+    let contadores = as_vec("contadores");
+    let find_counter = |device_id: &Value| -> Option<&Value> {
+        contadores
+            .iter()
+            .find(|c| c.get("DeviceId").map(|v| v.to_string()) == Some(device_id.to_string()))
+    };
+
+    let merged: Vec<Value> = discos
+        .iter()
+        .map(|d| {
+            let empty = json!({});
+            let c = d
+                .get("DeviceId")
+                .and_then(|id| find_counter(id))
+                .unwrap_or(&empty);
+            json!({
+                "name": d.get("FriendlyName"),
+                "health": d.get("HealthStatus"),
+                "operational_status": d.get("OperationalStatus"),
+                "media_type": d.get("MediaType"),
+                "size_gb": d.get("Size").and_then(|v| v.as_f64()).map(|b| (b / 1e9 * 10.0).round() / 10.0),
+                "wear_pct": c.get("Wear"),
+                "read_errors_uncorrected": c.get("ReadErrorsUncorrected"),
+                "write_errors_uncorrected": c.get("WriteErrorsUncorrected"),
+                "temperature": c.get("Temperature"),
+                "power_on_hours": c.get("PowerOnHours"),
+            })
+        })
+        .collect();
+    Some(Value::Array(merged))
+}
+
+/// Sinais de problema elétrico -- portado de power_health.py. Event ID 41
+/// (Kernel-Power) é gravado quando o Windows liga de novo depois de ter
+/// sido desligado sem receber o sinal normal de shutdown (queda de energia
+/// ou travamento duro). Win32_Battery cobre nobreak/UPS reconhecido via USB
+/// (BatteryStatus 1 = rodando na bateria agora, ou seja, sem energia da
+/// rede neste momento).
+#[cfg(windows)]
+fn collect_power_health() -> Option<Value> {
+    let (status, out) = run_powershell(
+        "$eventos = Get-WinEvent -FilterHashtable @{LogName='System'; Id=41; StartTime=(Get-Date).AddDays(-1)} -ErrorAction SilentlyContinue | \
+         Select-Object TimeCreated; \
+         $baterias = Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue | \
+         Select-Object Name,BatteryStatus,EstimatedChargeRemaining,EstimatedRunTime; \
+         @{eventos=$eventos; baterias=$baterias} | ConvertTo-Json -Compress -Depth 4",
+    );
+    if status != "done" {
+        return None;
+    }
+    out.get("stdout")
+        .and_then(|s| s.as_str())
+        .and_then(|s| serde_json::from_str(s).ok())
+}
+
+/// Saúde geral do Windows -- portado de windows_health.py. Fica de fora,
+/// de propósito, a checagem de updates pendentes via
+/// Microsoft.Update.Session (o método real, usado no BetaCube Monitor):
+/// ela bate no serviço de Windows Update e pode levar mais de um minuto,
+/// pesado demais pra rodar a cada ciclo. `reboot_pending` é um proxy bem
+/// mais barato (só lê 2 chaves de registro) que cobre o caso mais comum
+/// (reinicialização pendente por update já instalado).
+#[cfg(windows)]
+fn collect_windows_health() -> Option<Value> {
+    let (status, out) = run_powershell(
+        "$erros = (Get-WinEvent -FilterHashtable @{LogName='System'; Level=1,2; StartTime=(Get-Date).AddHours(-24)} -ErrorAction SilentlyContinue | Measure-Object).Count; \
+         $servicos = @('wuauserv','WinDefend','Dnscache','BITS','EventLog','RpcSs') | ForEach-Object { \
+             $s = Get-Service -Name $_ -ErrorAction SilentlyContinue; \
+             if ($s -and $s.Status -ne 'Running') { $s.Name } \
+         }; \
+         $discos_criticos = Get-PSDrive -PSProvider FileSystem | Where-Object { ($_.Used + $_.Free) -gt 0 -and ($_.Free / ($_.Used + $_.Free)) -lt 0.10 } | \
+             ForEach-Object { @{drive=$_.Name; free_gb=[math]::Round($_.Free/1e9,1); pct_used=[math]::Round(100*$_.Used/($_.Used+$_.Free),1)} }; \
+         $reboot_pending = (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending') -or \
+             (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired'); \
+         @{critical_events_24h=$erros; stopped_services=@($servicos); disks_low_space=@($discos_criticos); reboot_pending=$reboot_pending} | ConvertTo-Json -Compress -Depth 4",
+    );
+    if status != "done" {
+        return None;
+    }
+    out.get("stdout")
+        .and_then(|s| s.as_str())
+        .and_then(|s| serde_json::from_str(s).ok())
 }
 
 /// Roda o `hwsensor-helper.exe` (empacotado do lado do exe principal, ver
