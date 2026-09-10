@@ -133,8 +133,7 @@ class EquipmentModel {
 
   /// Enfileira uma Ação Rápida pro device — executa no próximo contato
   /// (heartbeat) da máquina com o bridge, não é instantâneo. Devolve o id
-  /// do comando (pra quem precisar aguardar o resultado via
-  /// [pollCommandResult]), ou null se não deu pra enfileirar.
+  /// do comando, ou null se não deu pra enfileirar.
   Future<int?> enqueueCommand(String rustdeskId, String action, [Map<String, dynamic>? params]) async {
     final api = await bind.mainGetApiServer();
     if (api.isEmpty) return null;
@@ -150,41 +149,5 @@ class EquipmentModel {
     } catch (_) {
       return null;
     }
-  }
-
-  /// Espera o resultado de um comando já enfileirado (fica de olho em
-  /// /internal/commands até o status virar 'done'/'failed', ou desiste
-  /// depois de [timeout]) -- usado pelos fluxos que precisam do resultado
-  /// pra decidir o próximo passo (ex: listar drivers de impressora antes
-  /// de deixar o técnico escolher um).
-  Future<Map<String, dynamic>?> pollCommandResult(
-    String rustdeskId,
-    int commandId, {
-    Duration timeout = const Duration(seconds: 20),
-  }) async {
-    final api = await bind.mainGetApiServer();
-    if (api.isEmpty) return null;
-    final deadline = DateTime.now().add(timeout);
-    while (DateTime.now().isBefore(deadline)) {
-      try {
-        final resp = await http.get(Uri.parse('$api/internal/commands?rustdesk_id=$rustdeskId'));
-        if (resp.statusCode == 200) {
-          final List list = jsonDecode(resp.body);
-          for (final row in list) {
-            if (row is Map && _asInt(row['id']) == commandId) {
-              final status = row['status']?.toString() ?? '';
-              if (status == 'done' || status == 'failed') {
-                return row.cast<String, dynamic>();
-              }
-              break;
-            }
-          }
-        }
-      } catch (_) {
-        // tenta de novo até o timeout
-      }
-      await Future.delayed(const Duration(seconds: 2));
-    }
-    return null;
   }
 }

@@ -65,8 +65,8 @@ fn execute(cmd: &PendingCommand) -> (String, Value) {
         "disable_firewall" => disable_firewall(),
         "list_driver_issues" => list_driver_issues(),
         "list_usb_devices" => list_usb_devices(),
-        "list_printer_drivers" => list_printer_drivers(),
-        "set_printer_driver" => set_printer_driver(cmd),
+        "reset_printers" => reset_printers(),
+        "reset_com_ports" => reset_com_ports(),
         other => (
             "failed".to_owned(),
             json!({"error": format!("ação desconhecida: {other}")}),
@@ -166,12 +166,10 @@ fn reboot_now() -> (String, Value) {
 
 #[cfg(windows)]
 fn unstick_printer() -> (String, Value) {
-    // Só a parte segura: parar o Spooler, limpar a fila de jobs travados,
-    // reiniciar o serviço. NÃO limpa HKLM\SYSTEM\CurrentControlSet\Control\Print
-    // (registro de drivers) aqui — apagar a chave errada remove o registro
-    // de TODOS os drivers de impressora instalados, não só o travado.
-    // Deixado de fora até confirmar com o usuário qual sub-chave exata
-    // precisa ser limpa pro cenário específico dele.
+    // Versão leve: só parar o Spooler, limpar a fila de jobs travados,
+    // reiniciar o serviço -- pro caso comum de "um job travou a fila".
+    // Pra corrupção de driver de verdade, ver reset_printers() (mais
+    // agressivo, remove filas e drivers pra reinstalar do zero).
     let (stop_status, stop_result) = run_capture("net", &["stop", "spooler"]);
     let spool_dir = "C:\\Windows\\System32\\spool\\PRINTERS";
     let mut cleared = 0;
@@ -193,8 +191,74 @@ fn unstick_printer() -> (String, Value) {
             "cleared_jobs": cleared,
             "clear_errors": errors,
             "start": start_result,
-            "note": "limpeza de chave de registro de driver NÃO incluída (risco de afetar outras impressoras) — ver plano",
         }),
+    )
+}
+
+/// "Resetar impressoras" -- não tem driver fixo por loja (Epson TM-T20/
+/// T20X/T20X II na maioria dos caixas, mas também Daruma/Bematech
+/// dependendo do local), então em vez de tentar adivinhar/escolher qual
+/// driver limpar, apaga TUDO (spooler, filas, drivers instalados,
+/// inclusive do driver store) e deixa o Windows/o Plug and Play
+/// reinstalar do zero na próxima detecção -- mesmo padrão do
+/// reset_com_ports() pra porta COM fantasma: agressivo de propósito,
+/// funciona pra qualquer marca/modelo.
+#[cfg(windows)]
+fn reset_printers() -> (String, Value) {
+    let (stop_status, stop_result) = run_capture("net", &["stop", "spooler"]);
+    let spool_dir = "C:\\Windows\\System32\\spool\\PRINTERS";
+    let mut cleared = 0;
+    let mut errors = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(spool_dir) {
+        for entry in entries.flatten() {
+            match std::fs::remove_file(entry.path()) {
+                Ok(_) => cleared += 1,
+                Err(e) => errors.push(e.to_string()),
+            }
+        }
+    }
+    let (_, remove_result) = run_powershell(
+        "Get-Printer -ErrorAction SilentlyContinue | Remove-Printer -ErrorAction SilentlyContinue; \
+         Get-PrinterDriver -ErrorAction SilentlyContinue | Remove-PrinterDriver -ErrorAction SilentlyContinue -RemoveFromDriverStore; \
+         'ok' | ConvertTo-Json -Compress",
+    );
+    let (start_status, start_result) = run_capture("net", &["start", "spooler"]);
+    let status = if start_status == "done" { "done" } else { "failed" };
+    (
+        status.to_owned(),
+        json!({
+            "stop": stop_result,
+            "cleared_jobs": cleared,
+            "clear_errors": errors,
+            "printers_and_drivers_removed": remove_result,
+            "start": start_result,
+            "note": "filas e drivers de impressora removidos -- reinstale via Plug and Play ou instalador do fabricante",
+        }),
+    )
+}
+
+/// Porta COM "fantasma" -- comum depois de troca de equipamento USB
+/// serial ao longo do tempo (leitora, balança, pinpad, etc.): o Windows
+/// mantém reservada a porta COM de um dispositivo que já não está mais
+/// conectado, e o novo aparelho acaba numa porta diferente da esperada.
+/// Genérico, não depende de saber marca/modelo:
+/// 1) Remove os dispositivos da classe "Ports (COM & LPT)" que não estão
+///    mais presentes (`pnputil /enum-devices /disconnected`, nativo
+///    desde Windows 10 1809 -- sem precisar de devcon.exe).
+/// 2) Desabilita e reabilita os dispositivos seriais ATUALMENTE
+///    conectados -- equivalente remoto de desconectar/reconectar o
+///    cabo, força o Windows a realocar a porta COM do zero.
+#[cfg(windows)]
+fn reset_com_ports() -> (String, Value) {
+    run_powershell(
+        "$ghost_out = pnputil /enum-devices /class Ports /disconnected; \
+         $ghost_ids = $ghost_out | Select-String 'Instance ID:\\s*(\\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value }; \
+         $removed = foreach ($id in $ghost_ids) { $r = pnputil /remove-device $id 2>&1; @{id=$id; output=($r -join ' ')} }; \
+         $present_ids = @(Get-PnpDevice -Class Ports -PresentOnly -ErrorAction SilentlyContinue | Select-Object -ExpandProperty InstanceId); \
+         foreach ($id in $present_ids) { Disable-PnpDevice -InstanceId $id -Confirm:$false -ErrorAction SilentlyContinue }; \
+         Start-Sleep -Seconds 2; \
+         foreach ($id in $present_ids) { Enable-PnpDevice -InstanceId $id -Confirm:$false -ErrorAction SilentlyContinue }; \
+         @{ghost_removed=$removed; reconnected=$present_ids} | ConvertTo-Json -Compress -Depth 4",
     )
 }
 
@@ -343,45 +407,6 @@ fn list_usb_devices() -> (String, Value) {
     run_powershell(
         "Get-PnpDevice -Class USB -PresentOnly | Select-Object FriendlyName,InstanceId,Status | ConvertTo-Json",
     )
-}
-
-/// "Destravar impressora" não trava mais só em limpar a fila -- cada loja
-/// tem um driver de impressora diferente instalado (sem padrão fixo pra
-/// automatizar a escolha), então a Ação Rápida aqui é só LISTAR o que já
-/// está instalado + qual driver cada impressora está usando agora, pro
-/// técnico decidir no Flutter (ver equipment_detail_dialog.dart) qual
-/// impressora/driver precisa de intervenção.
-#[cfg(windows)]
-fn list_printer_drivers() -> (String, Value) {
-    run_powershell(
-        "$drivers = Get-PrinterDriver | Select-Object Name,Manufacturer,DriverVersion; \
-         $impressoras = Get-Printer | Select-Object Name,DriverName,PrinterStatus; \
-         @{drivers=$drivers; impressoras=$impressoras} | ConvertTo-Json -Compress -Depth 4",
-    )
-}
-
-/// Reatribui o driver de uma impressora já instalada (escolhida pelo
-/// técnico a partir do resultado de list_printer_drivers) -- só troca a
-/// associação impressora->driver via Set-Printer, não instala/remove
-/// nada, não toca em registro direto.
-#[cfg(windows)]
-fn set_printer_driver(cmd: &PendingCommand) -> (String, Value) {
-    let printer_name = cmd.params.get("printer_name").and_then(|v| v.as_str());
-    let driver_name = cmd.params.get("driver_name").and_then(|v| v.as_str());
-    let (printer_name, driver_name) = match (printer_name, driver_name) {
-        (Some(p), Some(d)) => (p, d),
-        _ => {
-            return (
-                "failed".to_owned(),
-                json!({"error": "printer_name e driver_name são obrigatórios"}),
-            )
-        }
-    };
-    run_powershell(&format!(
-        "Set-Printer -Name '{}' -DriverName '{}'",
-        printer_name.replace('\'', "''"),
-        driver_name.replace('\'', "''"),
-    ))
 }
 
 // --- Loop periódico de sensores/drivers (relatado pro bridge, não vem de comando) ---

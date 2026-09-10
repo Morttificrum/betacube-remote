@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 
 import '../../common.dart';
@@ -59,8 +57,6 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
     });
   }
 
-  bool _printerPickerLoading = false;
-
   Future<void> _runAction(String action, {Map<String, dynamic>? params, String? label}) async {
     final id = await gFFI.equipmentModel.enqueueCommand(widget.item.rustdeskId!, action, params);
     if (!mounted) return;
@@ -73,121 +69,6 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
 
   void _runSensitiveAction(String action, String label) {
     deleteConfirmDialog(() async => await _runAction(action, label: label), label);
-  }
-
-  /// "Destravar impressora" (parte 2): não existe driver fixo por loja, então
-  /// em vez de adivinhar, lista o que está instalado agora e deixa o
-  /// técnico escolher a impressora + driver antes de aplicar (set_printer_driver).
-  Future<void> _openPrinterDriverPicker() async {
-    final rustdeskId = widget.item.rustdeskId!;
-    setState(() => _printerPickerLoading = true);
-    final commandId = await gFFI.equipmentModel.enqueueCommand(rustdeskId, 'list_printer_drivers');
-    if (commandId == null) {
-      setState(() {
-        _printerPickerLoading = false;
-        _lastActionMessage = translate('falha ao enviar comando');
-      });
-      return;
-    }
-    final row = await gFFI.equipmentModel.pollCommandResult(rustdeskId, commandId);
-    if (!mounted) return;
-    setState(() => _printerPickerLoading = false);
-
-    // result_json vem duas vezes serializado: a coluna do bridge guarda o
-    // JSON do comando ({"stdout": ..., "stderr": ..., "exit_code": ...})
-    // como STRING, e "stdout" por sua vez é a saída do
-    // `ConvertTo-Json -Compress` do PowerShell, outra string JSON dentro
-    // dessa.
-    Map<String, dynamic>? parsed;
-    try {
-      final resultJson = row?['result_json'] as String?;
-      if (resultJson != null && resultJson.trim().isNotEmpty) {
-        final resultMap = jsonDecode(resultJson) as Map<String, dynamic>;
-        final stdout = resultMap['stdout'] as String?;
-        if (stdout != null && stdout.trim().isNotEmpty) {
-          parsed = jsonDecode(stdout) as Map<String, dynamic>;
-        }
-      }
-    } catch (_) {}
-
-    if (row == null || row['status'] != 'done' || parsed == null) {
-      setState(() => _lastActionMessage = translate('Não foi possível listar os drivers de impressora (sem resposta a tempo, ou a máquina está offline)'));
-      return;
-    }
-
-    final drivers = (parsed['drivers'] is List ? parsed['drivers'] : [parsed['drivers']])
-        .whereType<Map>()
-        .map((d) => d['Name']?.toString())
-        .whereType<String>()
-        .toList();
-    final impressoras = (parsed['impressoras'] is List ? parsed['impressoras'] : [parsed['impressoras']])
-        .whereType<Map>()
-        .toList();
-
-    if (!mounted) return;
-    _showPrinterDriverDialog(rustdeskId, impressoras, drivers);
-  }
-
-  void _showPrinterDriverDialog(String rustdeskId, List<Map> impressoras, List<String> drivers) {
-    if (impressoras.isEmpty) {
-      setState(() => _lastActionMessage = translate('Nenhuma impressora encontrada na máquina'));
-      return;
-    }
-    String? selectedPrinter = impressoras.first['Name']?.toString();
-    String? selectedDriver = drivers.isNotEmpty ? drivers.first : null;
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: Text(translate('Destravar impressora')),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(translate('Impressora')),
-              DropdownButton<String>(
-                isExpanded: true,
-                value: selectedPrinter,
-                items: impressoras
-                    .map((p) => p['Name']?.toString())
-                    .whereType<String>()
-                    .toSet()
-                    .map((name) => DropdownMenuItem(value: name, child: Text(name)))
-                    .toList(),
-                onChanged: (v) => setDialogState(() => selectedPrinter = v),
-              ),
-              const SizedBox(height: 12),
-              Text(translate('Driver')),
-              DropdownButton<String>(
-                isExpanded: true,
-                value: selectedDriver,
-                items: drivers
-                    .toSet()
-                    .map((name) => DropdownMenuItem(value: name, child: Text(name)))
-                    .toList(),
-                onChanged: (v) => setDialogState(() => selectedDriver = v),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: Text(translate('Cancel'))),
-            TextButton(
-              onPressed: selectedPrinter == null || selectedDriver == null
-                  ? null
-                  : () {
-                      Navigator.of(ctx).pop();
-                      _runAction(
-                        'set_printer_driver',
-                        params: {'printer_name': selectedPrinter, 'driver_name': selectedDriver},
-                        label: '${translate("Printer driver")}: $selectedPrinter -> $selectedDriver',
-                      );
-                    },
-              child: Text(translate('Apply')),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   @override
@@ -253,11 +134,12 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
         _actionButton('clear_temp', translate('Clear temp/prefetch')),
         _chkdskButton(),
         _actionButton('unstick_printer', translate('Unstick printer')),
-        _printerDriverButton(),
+        _sensitiveActionButton('reset_printers', translate('Reset printers')),
+        _actionButton('reset_com_ports', translate('Reset COM ports')),
         _actionButton('restart_services', 'Tomcat', params: {'name_contains': ['tomcat']}),
         _actionButton('restart_services', 'SITEF', params: {'name_contains': ['WNBMonitor', 'WNBTLSclient']}),
-        _sensitiveActionButton('disable_defender', 'Windows Defender'),
-        _sensitiveActionButton('disable_firewall', 'Windows Firewall'),
+        _sensitiveActionButton('disable_defender', '${translate("Disable")} Windows Defender'),
+        _sensitiveActionButton('disable_firewall', '${translate("Disable")} Windows Firewall'),
       ],
     );
   }
@@ -266,15 +148,6 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
     return ElevatedButton(
       onPressed: () => _runAction(action, params: params, label: label),
       child: Text(label),
-    );
-  }
-
-  Widget _printerDriverButton() {
-    return ElevatedButton(
-      onPressed: _printerPickerLoading ? null : _openPrinterDriverPicker,
-      child: _printerPickerLoading
-          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-          : Text(translate('Choose printer driver')),
     );
   }
 
@@ -310,7 +183,7 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
     return ElevatedButton(
       style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade100),
       onPressed: () => _runSensitiveAction(action, label),
-      child: Text('${translate("Disable")} $label'),
+      child: Text(label),
     );
   }
 
