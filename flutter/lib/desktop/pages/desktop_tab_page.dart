@@ -61,6 +61,10 @@ class _DesktopTabPageState extends State<DesktopTabPage> {
           unselectedIcon: Icons.computer,
           closable: false,
           page: const EquipmentPage()));
+      // `add` always jumps to the tab it just added, so without this the
+      // app opens on Equipment instead of Home on every launch -- not what
+      // a technician wants staring back at them on a store PC.
+      tabController.jumpTo(0, callOnSelected: false);
     }
     if (bind.isIncomingOnly()) {
       tabController.onSelected = (key) {

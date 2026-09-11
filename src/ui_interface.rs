@@ -76,6 +76,9 @@ lazy_static::lazy_static! {
 lazy_static::lazy_static! {
     static ref OPTION_SYNCED: Arc<Mutex<bool>> = Default::default();
     static ref OPTIONS : Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(Config::get_options()));
+    // Last error from a "multi-password-upsert" (e.g. max slots reached),
+    // surfaced to the settings UI via `main_get_option("multi-password-error")`.
+    static ref LAST_MULTI_PASSWORD_ERROR: Mutex<String> = Default::default();
     pub static ref SENDER : Mutex<mpsc::UnboundedSender<ipc::Data>> = Mutex::new(check_connect_status(true));
     static ref CHILDREN : Children = Default::default();
 }
@@ -161,10 +164,22 @@ pub fn refresh_options() {
 
 #[inline]
 pub fn get_option<T: AsRef<str>>(key: T) -> String {
+    let key = key.as_ref();
+    // Fase 3 (perfis de acesso): the daemon is the source of truth, queried
+    // live over IPC instead of the UI process's own cached `OPTIONS`, since
+    // slots can be edited from any connected UI.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if key == "multi-password-list" {
+        return ipc::multi_password_list().unwrap_or_else(|_| "[]".to_owned());
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if key == "multi-password-error" {
+        return std::mem::take(&mut *LAST_MULTI_PASSWORD_ERROR.lock().unwrap());
+    }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let map = OPTIONS.lock().unwrap();
-        if let Some(v) = map.get(key.as_ref()) {
+        if let Some(v) = map.get(key) {
             v.to_owned()
         } else {
             "".to_owned()
@@ -172,7 +187,7 @@ pub fn get_option<T: AsRef<str>>(key: T) -> String {
     }
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
-        Config::get_option(key.as_ref())
+        Config::get_option(key)
     }
 }
 
@@ -446,6 +461,28 @@ pub fn set_option(key: String, value: String) {
     } else if &key == "audio-input" {
         #[cfg(not(target_os = "ios"))]
         crate::audio_service::restart();
+    } else if &key == "multi-password-upsert" {
+        // `value` is the raw JSON the Flutter settings UI built
+        // (`{"label":..,"password":..,"profile":{...}}`); forwarded as-is to
+        // the daemon, which hashes the password and never sees it again.
+        // Errors (e.g. max slots reached) are dropped here since this path
+        // has no return channel to the UI; `main_get_option("multi-password-error")`
+        // below exposes the last one instead.
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let err = match ipc::multi_password_upsert(value) {
+                Ok(()) => String::new(),
+                Err(e) => e.to_string(),
+            };
+            *LAST_MULTI_PASSWORD_ERROR.lock().unwrap() = err;
+        }
+        return;
+    } else if &key == "multi-password-remove" {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            allow_err!(ipc::multi_password_remove(value));
+        }
+        return;
     }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {

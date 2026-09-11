@@ -155,6 +155,18 @@ class _EquipmentRow extends StatelessWidget {
                           : translate('No Beta Cube Remote installed'),
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
+                    // "Online" só diz que o heartbeat chegou -- não que dá
+                    // pra abrir sessão remota de fato. Mostra o segundo
+                    // sinal só quando é conhecido E discorda do primeiro,
+                    // pra não duplicar informação na linha toda vez.
+                    if (hasAgent && item.reachable == false)
+                      Text(
+                        translate('Not reachable for remote session'),
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: Colors.orange),
+                      ),
                   ],
                 ),
               ),

@@ -1,10 +1,10 @@
 use std::{
     net::SocketAddr,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicI64, Ordering},
         Arc, RwLock,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use uuid::Uuid;
@@ -51,6 +51,31 @@ lazy_static::lazy_static! {
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 static MANUAL_RESTARTED: AtomicBool = AtomicBool::new(false);
 static SENT_REGISTER_PK: AtomicBool = AtomicBool::new(false);
+// Fase 3 (item 3, teste real nas lojas 2026-09-11): "aparece Online no
+// Equipment mas o botão Conectar diz que a máquina está offline" -- são
+// dois sinais diferentes. O Equipment hoje só sabe se nosso heartbeat
+// pro bridge chegou; isso aqui é o outro sinal, que o bridge não tem
+// nenhum jeito de checar por fora: quando o servidor de ID/rendezvous
+// do próprio RustDesk respondeu por último confirmando o registro desta
+// máquina (é isso que decide se ALGUÉM consegue abrir uma sessão remota).
+// Epoch millis, 0 = nunca registrou nesta execução.
+static LAST_REGISTER_OK_MS: AtomicI64 = AtomicI64::new(0);
+
+fn mark_register_ok() {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    LAST_REGISTER_OK_MS.store(now_ms, Ordering::SeqCst);
+}
+
+/// Epoch millis of the last time the RustDesk ID/rendezvous server
+/// confirmed this machine's registration (0 if never, this run).
+/// Consumed by `quick_actions.rs` to report a "reachable for remote
+/// session" signal to the bridge, distinct from the heartbeat itself.
+pub fn last_register_ok_ms() -> i64 {
+    LAST_REGISTER_OK_MS.load(Ordering::SeqCst)
+}
 pub(crate) static NEEDS_DEPLOY: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "android")]
 static NOTIFIED_NEEDS_DEPLOY: AtomicBool = AtomicBool::new(false);
@@ -238,6 +263,7 @@ impl RendezvousMediator {
         loop {
             let mut update_latency = || {
                 last_register_resp = Some(Instant::now());
+                mark_register_ok();
                 fails = 0;
                 reg_timeout = MIN_REG_TIMEOUT;
                 let mut latency = last_register_sent

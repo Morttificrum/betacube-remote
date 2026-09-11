@@ -898,6 +898,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
               child: Column(children: [
                 permissions(context),
                 password(context),
+                accessProfiles(context),
                 _Card(title: '2FA', children: [tfa()]),
                 if (!isChangeIdDisabled())
                   _Card(title: 'ID', children: [changeId()]),
@@ -1287,6 +1288,10 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
             if (usePassword) radios[2],
           ]);
         })));
+  }
+
+  Widget accessProfiles(BuildContext context) {
+    return const _AccessProfilesCard();
   }
 
   Widget more(BuildContext context) {
@@ -2500,6 +2505,186 @@ class _AboutState extends State<_About> {
 //#endregion
 
 //#region components
+
+// Fase 3: múltiplas senhas por máquina, cada uma com seu próprio nível de
+// permissão (estilo AnyDesk) -- quem conectar com a senha do perfil "Só
+// visualização" fica restrito a essas permissões, mesmo que a senha
+// principal permita tudo. O Rust nunca guarda a senha em texto puro, só o
+// hash; ver src/multi_password.rs.
+class _AccessProfilesCard extends StatefulWidget {
+  const _AccessProfilesCard();
+
+  @override
+  State<_AccessProfilesCard> createState() => _AccessProfilesCardState();
+}
+
+class _AccessProfilesCardState extends State<_AccessProfilesCard> {
+  static const int _kMaxSlots = 5;
+
+  bool _loading = true;
+  List<MapEntry<String, Map<String, dynamic>>> _profiles = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final raw = await bind.mainGetOption(key: 'multi-password-list');
+    List<MapEntry<String, Map<String, dynamic>>> parsed = [];
+    try {
+      final decoded = jsonDecode(raw.isEmpty ? '[]' : raw) as List;
+      parsed = decoded
+          .map((e) => MapEntry<String, Map<String, dynamic>>(
+              (e as List)[0] as String,
+              Map<String, dynamic>.from(e[1] as Map)))
+          .toList();
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _profiles = parsed;
+      _loading = false;
+    });
+  }
+
+  Future<void> _removeProfile(String label) async {
+    await bind.mainSetOption(key: 'multi-password-remove', value: label);
+    await _load();
+  }
+
+  void _showEditDialog({String? existingLabel, Map<String, dynamic>? existingProfile}) {
+    final labelController = TextEditingController(text: existingLabel ?? '');
+    final passwordController = TextEditingController();
+    final perms = <String, bool>{
+      'keyboard': existingProfile?['keyboard'] ?? true,
+      'clipboard': existingProfile?['clipboard'] ?? true,
+      'audio': existingProfile?['audio'] ?? true,
+      'file': existingProfile?['file'] ?? true,
+      'restart': existingProfile?['restart'] ?? false,
+      'recording': existingProfile?['recording'] ?? false,
+      'block_input': existingProfile?['block_input'] ?? false,
+      'privacy_mode': existingProfile?['privacy_mode'] ?? false,
+    };
+    final permLabels = <String, String>{
+      'keyboard': 'Enable keyboard/mouse',
+      'clipboard': 'Enable clipboard',
+      'audio': 'Enable audio',
+      'file': 'Enable file transfer',
+      'restart': 'Enable remote restart',
+      'recording': 'Enable recording session',
+      'block_input': 'Enable blocking user input',
+      'privacy_mode': 'Enable privacy mode',
+    };
+    String? errorText;
+
+    gFFI.dialogManager.show((setState, close, context) {
+      return CustomAlertDialog(
+        title: Text(translate(existingLabel == null
+            ? 'Novo perfil de acesso'
+            : 'Editar perfil de acesso')),
+        content: SizedBox(
+          width: 420,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: labelController,
+                enabled: existingLabel == null,
+                decoration: InputDecoration(labelText: translate('Nome do perfil')),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: passwordController,
+                obscureText: true,
+                decoration: InputDecoration(
+                    labelText: translate(existingLabel == null
+                        ? 'Senha'
+                        : 'Nova senha (deixe em branco não é permitido)')),
+              ),
+              const SizedBox(height: 8),
+              ...permLabels.entries.map((entry) => CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: Text(translate(entry.value)),
+                    value: perms[entry.key],
+                    onChanged: (v) => setState(() => perms[entry.key] = v ?? false),
+                  )),
+              if (errorText != null)
+                Text(errorText!, style: const TextStyle(color: Colors.red)),
+            ],
+          ),
+        ),
+        actions: [
+          dialogButton(translate('Cancel'), onPressed: close, isOutline: true),
+          dialogButton(translate('OK'), onPressed: () async {
+            final label = labelController.text.trim();
+            final password = passwordController.text;
+            if (label.isEmpty || password.isEmpty) {
+              setState(() => errorText = translate('Preencha nome e senha'));
+              return;
+            }
+            final payload = jsonEncode({
+              'label': label,
+              'password': password,
+              'profile': perms,
+            });
+            await bind.mainSetOption(key: 'multi-password-upsert', value: payload);
+            final err = await bind.mainGetOption(key: 'multi-password-error');
+            if (err.isNotEmpty) {
+              setState(() => errorText = err);
+              return;
+            }
+            close();
+            await _load();
+          }),
+        ],
+        onCancel: close,
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return _Card(title: 'Perfis de acesso', children: [
+        SizedBox(height: 20, child: Center(child: CircularProgressIndicator())),
+      ]);
+    }
+    return _Card(title: 'Perfis de acesso', title_suffix: [
+      IconButton(
+        icon: const Icon(Icons.add),
+        tooltip: translate('Novo perfil de acesso'),
+        onPressed: _profiles.length >= _kMaxSlots
+            ? null
+            : () => _showEditDialog(),
+      ),
+    ], children: [
+      if (_profiles.isEmpty)
+        Text(translate(
+                'Nenhum perfil extra -- só a senha principal, com acesso total, está ativa.'))
+            .marginOnly(left: _kContentHMargin),
+      ..._profiles.map((entry) => Row(
+            children: [
+              Expanded(child: Text(entry.key)),
+              IconButton(
+                icon: const Icon(Icons.edit, size: 18),
+                tooltip: translate('Trocar senha/permissões'),
+                onPressed: () => _showEditDialog(
+                    existingLabel: entry.key, existingProfile: entry.value),
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete_outline, size: 18),
+                tooltip: translate('Remover'),
+                onPressed: () => _removeProfile(entry.key),
+              ),
+            ],
+          ).marginOnly(left: _kContentHMargin)),
+    ]);
+  }
+}
 
 // ignore: non_constant_identifier_names
 Widget _Card(

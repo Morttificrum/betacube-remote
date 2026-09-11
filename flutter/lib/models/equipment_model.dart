@@ -29,6 +29,12 @@ class EquipmentItem {
   final String? rustdeskId;
   final bool online;
   final double? lastSeenAt;
+  // Sinal DIFERENTE de `online`: heartbeat chegando no bridge não implica
+  // que o servidor de ID/rendezvous do RustDesk considere a máquina
+  // alcançável pra sessão remota (o que decide se o botão Conectar
+  // funciona) -- ver item 3, teste real nas lojas 2026-09-11. null =
+  // cliente ainda não reporta isso (versão antiga), não "com problema".
+  final bool? reachable;
 
   EquipmentItem({
     required this.glpiId,
@@ -38,6 +44,7 @@ class EquipmentItem {
     this.rustdeskId,
     required this.online,
     this.lastSeenAt,
+    this.reachable,
   });
 
   bool get hasAgent => rustdeskId != null && rustdeskId!.isNotEmpty;
@@ -51,6 +58,7 @@ class EquipmentItem {
       rustdeskId: json['rustdesk_id']?.toString(),
       online: json['online'] == true,
       lastSeenAt: (json['last_seen_at'] as num?)?.toDouble(),
+      reachable: json['reachable'] is bool ? json['reachable'] as bool : null,
     );
   }
 }

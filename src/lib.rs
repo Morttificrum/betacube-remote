@@ -68,6 +68,8 @@ mod ui_session_interface;
 
 mod hbbs_http;
 
+mod multi_password;
+
 #[cfg(windows)]
 mod quick_actions;
 

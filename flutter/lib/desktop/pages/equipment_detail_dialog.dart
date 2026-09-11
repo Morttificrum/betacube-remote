@@ -331,9 +331,22 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
         _actionButton('unstick_printer', translate('Unstick printer')),
         _sensitiveActionButton('reset_printers', translate('Reset printers')),
         _actionButton('reset_com_ports', translate('Reset COM ports')),
+        _sensitiveActionButton('reinstall_usb_devices', translate('Reinstall USB devices')),
         _driverPickerButton(),
         _actionButton('restart_services', 'Tomcat', params: {'name_contains': ['tomcat']}),
-        _actionButton('restart_services', 'SITEF', params: {'name_contains': ['WNBMonitor', 'WNBTLSclient']}),
+        // Nome interno do serviço Windows nunca foi confirmado -- só o
+        // Display Name (o que aparece em services.msc). Cobre os dois
+        // formatos (com e sem espaço/maiúsculas) já que quick_actions.rs
+        // agora casa contra Name E DisplayName.
+        _actionButton('restart_services', 'SITEF',
+            params: {
+              'name_contains': [
+                'WNBMonitor',
+                'WNBTLSclient',
+                'WNB Monitor',
+                'WNB TLS Client'
+              ]
+            }),
         _actionButton('scan_processos', translate('Scan running processes')),
         _actionButton('defender_full_scan', translate('Defender full scan')),
         _sensitiveActionButton('disable_defender', '${translate("Disable")} Windows Defender'),

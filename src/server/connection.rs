@@ -314,6 +314,12 @@ pub struct Connection {
     block_input: bool,
     privacy_mode: bool,
     control_permissions: Option<ControlPermissions>,
+    // Set when login matched one of the extra password-slot profiles
+    // (`crate::multi_password`) instead of the primary/temporary password.
+    // Applied to the permission fields above right after login succeeds,
+    // since those fields are computed at construction time, before any
+    // password is known.
+    matched_password_profile: Option<crate::multi_password::PermissionProfile>,
     last_test_delay: Option<Instant>,
     network_delay: u32,
     lock_after_session_end: bool,
@@ -513,6 +519,7 @@ impl Connection {
             block_input: Self::permission(keys::OPTION_ENABLE_BLOCK_INPUT, &control_permissions),
             privacy_mode: Self::permission(keys::OPTION_ENABLE_PRIVACY_MODE, &control_permissions),
             control_permissions,
+            matched_password_profile: None,
             last_test_delay: None,
             network_delay: 0,
             lock_after_session_end: false,
@@ -2305,7 +2312,32 @@ impl Connection {
                 }
             }
         }
+        // Extra permission-scoped password slots (Fase 3: multiple passwords
+        // per machine, AnyDesk-style). Checked independently of the primary
+        // password's storage/preset flow above -- any configured slot works
+        // regardless of whether the primary password is currently enabled.
+        if let Some(profile) =
+            crate::multi_password::find_matching_profile(|h1| self.verify_h1(h1))
+        {
+            self.matched_password_profile = Some(profile);
+            self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::PermanentPassword);
+            return true;
+        }
         false
+    }
+
+    fn apply_matched_password_profile(&mut self) {
+        let Some(profile) = self.matched_password_profile.clone() else {
+            return;
+        };
+        self.keyboard = profile.keyboard;
+        self.clipboard = profile.clipboard;
+        self.audio = profile.audio;
+        self.file = profile.file;
+        self.restart = profile.restart;
+        self.recording = profile.recording;
+        self.block_input = profile.block_input;
+        self.privacy_mode = profile.privacy_mode;
     }
 
     fn is_recent_session(&mut self, tfa: bool) -> bool {
@@ -2693,6 +2725,7 @@ impl Connection {
                     }
                 } else {
                     self.update_failure_with_scope(failure, true, 0, FailureScope::Default);
+                    self.apply_matched_password_profile();
                     if err_msg.is_empty() {
                         #[cfg(target_os = "linux")]
                         self.linux_headless_handle.wait_desktop_cm_ready().await;

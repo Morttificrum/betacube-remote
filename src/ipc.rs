@@ -873,6 +873,11 @@ async fn handle(data: Data, stream: &mut Connection) {
                     value = Some(Config::get_unlock_pin());
                 } else if name == "trusted-devices" {
                     value = Some(Config::get_trusted_devices_json());
+                } else if name == "multi-password-list" {
+                    value = Some(
+                        serde_json::to_string(&crate::multi_password::list_labels_and_profiles())
+                            .unwrap_or_default(),
+                    );
                 } else {
                     value = None;
                 }
@@ -903,6 +908,19 @@ async fn handle(data: Data, stream: &mut Connection) {
                     crate::audio_service::set_voice_call_input_device(Some(value), true);
                 } else if name == "unlock-pin" {
                     Config::set_unlock_pin(&value);
+                } else if name == "multi-password-upsert" {
+                    let ack = match serde_json::from_str::<crate::multi_password::UpsertRequest>(&value)
+                    {
+                        Ok(req) => match crate::multi_password::upsert_slot(req) {
+                            Ok(()) => "Y".to_owned(),
+                            Err(msg) => format!("N:{msg}"),
+                        },
+                        Err(err) => format!("N:Requisição inválida: {err}"),
+                    };
+                    updated = ack == "Y";
+                    allow_err!(stream.send(&Data::Config((name.clone(), Some(ack)))).await);
+                } else if name == "multi-password-remove" {
+                    crate::multi_password::remove_slot(&value);
                 } else {
                     return;
                 }
@@ -1602,6 +1620,41 @@ pub fn set_permanent_password(v: String) -> ResultType<()> {
 #[tokio::main(flavor = "current_thread")]
 pub async fn set_permanent_password_with_ack(v: String) -> ResultType<bool> {
     set_permanent_password_with_ack_async(v).await
+}
+
+/// Labels + permission profiles of the configured extra password slots
+/// (Fase 3), as a JSON array -- never includes the underlying hash.
+pub fn multi_password_list() -> ResultType<String> {
+    Ok(get_config("multi-password-list")?.unwrap_or_else(|| "[]".to_owned()))
+}
+
+/// `payload` is the raw JSON `{"label":..,"password":..,"profile":{...}}`
+/// built by the Flutter settings UI. Returns `Ok(())` on success, or
+/// `Err` with a message meant to be shown to the user (e.g. max slots
+/// reached) on rejection.
+#[tokio::main(flavor = "current_thread")]
+pub async fn multi_password_upsert(payload: String) -> ResultType<()> {
+    let ms_timeout = 1_000;
+    let mut c = connect(ms_timeout, "").await?;
+    c.send_config("multi-password-upsert", payload).await?;
+    if let Some(Data::Config((name2, Some(v)))) = c.next_timeout(ms_timeout).await? {
+        if name2 == "multi-password-upsert" {
+            if v == "Y" {
+                return Ok(());
+            }
+            let msg = v.strip_prefix("N:").unwrap_or("Falha ao salvar perfil de acesso");
+            bail!(msg.to_owned());
+        }
+    }
+    bail!("Sem resposta do daemon");
+}
+
+#[tokio::main(flavor = "current_thread")]
+pub async fn multi_password_remove(label: String) -> ResultType<()> {
+    let ms_timeout = 1_000;
+    let mut c = connect(ms_timeout, "").await?;
+    c.send_config("multi-password-remove", label).await?;
+    Ok(())
 }
 
 async fn set_permanent_password_with_ack_async(v: String) -> ResultType<bool> {

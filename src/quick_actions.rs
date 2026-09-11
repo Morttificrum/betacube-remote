@@ -67,6 +67,7 @@ fn execute(cmd: &PendingCommand) -> (String, Value) {
         "list_usb_devices" => list_usb_devices(),
         "reset_printers" => reset_printers(),
         "reset_com_ports" => reset_com_ports(),
+        "reinstall_usb_devices" => reinstall_usb_devices(),
         "install_driver" => install_driver(cmd),
         "scan_processos" => scan_processos(),
         "defender_full_scan" => defender_full_scan(),
@@ -340,6 +341,24 @@ fn reset_com_ports() -> (String, Value) {
     )
 }
 
+/// Desinstala o driver de todo dispositivo USB atualmente presente
+/// (mesma classe usada por `list_usb_devices`) e força o Windows a
+/// redetectar e reinstalar -- problema recorrente nas lojas com
+/// periféricos USB (leitor, pinpad, etc.) que "somem"/param sem um
+/// motivo aparente e voltam depois de um uninstall+rescan manual.
+/// Separado do `reset_com_ports`: ali é porta serial fantasma, aqui é o
+/// dispositivo USB em si, presente ou não.
+#[cfg(windows)]
+fn reinstall_usb_devices() -> (String, Value) {
+    run_powershell(
+        "$present_ids = @(Get-PnpDevice -Class USB -PresentOnly -ErrorAction SilentlyContinue | Select-Object -ExpandProperty InstanceId); \
+         $removed = foreach ($id in $present_ids) { $r = pnputil /remove-device $id 2>&1; @{id=$id; output=($r -join ' ')} }; \
+         Start-Sleep -Seconds 2; \
+         $rescan = pnputil /scan-devices 2>&1; \
+         @{removed=$removed; rescan=($rescan -join ' ')} | ConvertTo-Json -Compress -Depth 4",
+    )
+}
+
 /// Reinicia serviço(s) Windows encontrados por nome, porta ouvida, ou
 /// substring da linha de comando do processo — os 3 critérios são
 /// combináveis, um "match" em qualquer um já entra na lista.
@@ -374,8 +393,14 @@ fn restart_services_matching(cmd: &PendingCommand) -> (String, Value) {
         );
     }
 
+    // Some services are only ever known by their Display Name in
+    // services.msc (e.g. SITEF's "WNB Monitor" / "WNB TLS Client") --
+    // the internal `Name` can be something entirely different and
+    // unguessable from the outside. Fetch both and match against either,
+    // so a button built from what a technician actually sees on screen
+    // still works even if nobody's confirmed the real Name.
     let (status, dump) = run_powershell(
-        "$services = Get-CimInstance Win32_Service | Where-Object { $_.ProcessId -ne 0 } | Select-Object Name,ProcessId; \
+        "$services = Get-CimInstance Win32_Service | Where-Object { $_.ProcessId -ne 0 } | Select-Object Name,DisplayName,ProcessId; \
          $processes = Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine; \
          $listening = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Select-Object LocalPort,OwningProcess; \
          @{services=$services; processes=$processes; listening=$listening} | ConvertTo-Json -Depth 4 -Compress",
@@ -431,8 +456,14 @@ fn restart_services_matching(cmd: &PendingCommand) -> (String, Value) {
         .iter()
         .filter_map(|s| {
             let name = s.get("Name").and_then(|v| v.as_str())?;
+            let display_name = s.get("DisplayName").and_then(|v| v.as_str()).unwrap_or("");
             let pid = s.get("ProcessId").and_then(|v| v.as_i64());
-            let name_match = !name_patterns.is_empty() && name_patterns.iter().any(|p| name.to_lowercase().contains(p));
+            let name_lower = name.to_lowercase();
+            let display_lower = display_name.to_lowercase();
+            let name_match = !name_patterns.is_empty()
+                && name_patterns
+                    .iter()
+                    .any(|p| name_lower.contains(p) || display_lower.contains(p));
             let pid_match = pid.map_or(false, |pid| matched_pids.contains(&pid));
             (name_match || pid_match).then(|| name.to_owned())
         })
@@ -440,7 +471,7 @@ fn restart_services_matching(cmd: &PendingCommand) -> (String, Value) {
 
     if matched.is_empty() {
         let note = if matched_pids.is_empty() {
-            "nenhum serviço ou processo encontrado — parece parado; sem nome de serviço confirmado, não dá pra iniciar automaticamente"
+            "nenhum serviço ou processo encontrado (checado por Name, DisplayName, porta e linha de comando) — parece parado; sem nome confirmado, não dá pra iniciar automaticamente"
         } else {
             "processo encontrado (por porta/linha de comando) mas não é um serviço Windows registrado — não dá pra reiniciar sem saber o comando de inicialização"
         };
@@ -790,6 +821,21 @@ async fn sensor_loop_async() {
                 process_hashes: None,
             },
         };
+        // Item 3 (teste real nas lojas 2026-09-11): "Online" no Equipment
+        // hoje só significa "esse POST chegou" -- não diz nada sobre se o
+        // servidor de ID/rendezvous do RustDesk considera esta máquina
+        // alcançável pra sessão remota (o que decide se o botão Conectar
+        // funciona). São dois sinais de fato diferentes; manda os dois.
+        let last_register_ok_ms = crate::rendezvous_mediator::last_register_ok_ms();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        // Folga generosa sobre o intervalo de re-registro (15s) pra não
+        // marcar "não alcançável" por jitter normal de rede.
+        let rendezvous_reachable =
+            last_register_ok_ms > 0 && (now_ms - last_register_ok_ms) < 45_000;
+
         let body = json!({
             "id": id,
             "uuid": uuid,
@@ -798,6 +844,7 @@ async fn sensor_loop_async() {
             "disk_health": signals.disk_health,
             "power_health": signals.power_health,
             "windows_health": signals.windows_health,
+            "rendezvous_reachable": rendezvous_reachable,
         })
         .to_string();
         let sensors_url = format!("{}/api/sensors", url);
