@@ -71,6 +71,7 @@ fn execute(cmd: &PendingCommand) -> (String, Value) {
         "install_driver" => install_driver(cmd),
         "scan_processos" => scan_processos(),
         "defender_full_scan" => defender_full_scan(),
+        "network_http_proxy" => network_http_proxy(cmd),
         other => (
             "failed".to_owned(),
             json!({"error": format!("ação desconhecida: {other}")}),
@@ -757,6 +758,92 @@ fn defender_full_scan() -> (String, Value) {
     // jeito que sfc/DISM (bloqueia dentro do spawn_blocking já usado por
     // dispatch(), sem timeout artificial nosso).
     run_capture(&mpcmdrun, &["-Scan", "-ScanType", "2"])
+}
+
+/// Fase 6 (rede): "proxy burro" pro bridge. Controladores UniFi/Omada/
+/// roteadores Mikrotik das lojas ficam na LAN local -- o bridge, hospedado
+/// na internet, não os alcança sem VPN/port-forward por loja (ver decisão
+/// de arquitetura no plano da Fase 6). Em vez disso, o bridge monta a
+/// chamada HTTP inteira (URL, headers, autenticação de cada fabricante) e
+/// manda pra cá; este agente só executa, na mesma LAN do equipamento, e
+/// devolve status/headers/body sem interpretar nada. Nenhuma credencial de
+/// rede é conhecida ou fica guardada neste processo.
+#[cfg(windows)]
+fn network_http_proxy(cmd: &PendingCommand) -> (String, Value) {
+    let method = cmd
+        .params
+        .get("method")
+        .and_then(|v| v.as_str())
+        .unwrap_or("GET")
+        .to_uppercase();
+    let method = match reqwest::Method::from_bytes(method.as_bytes()) {
+        Ok(m) => m,
+        Err(_) => return ("failed".to_owned(), json!({"error": format!("método HTTP inválido: {method}")})),
+    };
+    let url = match cmd.params.get("url").and_then(|v| v.as_str()) {
+        Some(u) if !u.is_empty() => u.to_owned(),
+        _ => return ("failed".to_owned(), json!({"error": "url é obrigatória"})),
+    };
+    let headers: Vec<(String, String)> = cmd
+        .params
+        .get("headers")
+        .and_then(|v| v.as_object())
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let body = cmd
+        .params
+        .get("body")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_owned());
+    // Controladores/roteadores de loja costumam ter certificado
+    // auto-assinado (ver plano da Fase 6, seção Mikrotik) -- não dá pra
+    // validar CA de verdade numa frota assim, e a conexão real já passa
+    // pela LAN da própria loja, não pela internet exposta.
+    let insecure_tls = cmd
+        .params
+        .get("insecure_tls")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let handle = tokio::runtime::Handle::current();
+    let result: Result<(u16, serde_json::Map<String, Value>, String), String> = handle.block_on(async move {
+        let client = crate::hbbs_http::create_http_client_async(
+            hbb_common::tls::TlsType::Rustls,
+            insecure_tls,
+        );
+        let mut req = client.request(method, url.as_str());
+        for (k, v) in &headers {
+            req = req.header(k, v);
+        }
+        if let Some(b) = body {
+            req = req.body(b);
+        }
+        let resp = req
+            .timeout(std::time::Duration::from_secs(20))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = resp.status().as_u16();
+        let resp_headers: serde_json::Map<String, Value> = resp
+            .headers()
+            .iter()
+            .filter_map(|(k, v)| v.to_str().ok().map(|s| (k.to_string(), json!(s))))
+            .collect();
+        let resp_body = resp.text().await.unwrap_or_default();
+        Ok((status, resp_headers, resp_body))
+    });
+
+    match result {
+        Ok((status, headers, body)) => (
+            "done".to_owned(),
+            json!({"status": status, "headers": headers, "body": body}),
+        ),
+        Err(e) => ("failed".to_owned(), json!({"error": e})),
+    }
 }
 
 // --- Loop periódico de sensores/drivers (relatado pro bridge, não vem de comando) ---
