@@ -186,12 +186,14 @@ class _NetworkPageState extends State<NetworkPage> {
                 onChanged: (v) => setState(() => entityId = v),
               ),
               const SizedBox(height: 8),
-              // Só UniFi implementado por enquanto (Fase 6, primeira
-              // leva) -- Omada/Mikrotik entram nas próximas.
+              // Omada ainda não implementado (Fase 6 em andamento).
               DropdownButtonFormField<String>(
                 value: vendor,
                 decoration: InputDecoration(labelText: translate('Vendor')),
-                items: const [DropdownMenuItem(value: 'unifi', child: Text('UniFi'))],
+                items: const [
+                  DropdownMenuItem(value: 'unifi', child: Text('UniFi')),
+                  DropdownMenuItem(value: 'mikrotik', child: Text('Mikrotik')),
+                ],
                 onChanged: (v) => setState(() => vendor = v ?? 'unifi'),
               ),
               const SizedBox(height: 8),
