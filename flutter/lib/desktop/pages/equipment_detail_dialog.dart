@@ -12,11 +12,16 @@ import '../../models/model.dart';
 /// não do core Rust local (o device é remoto, quase nunca é a própria
 /// máquina rodando este Flutter).
 void showEquipmentDetailDialog(BuildContext context, EquipmentItem item) {
+  // Largura responsiva -- esse diálogo agora também abre a partir da aba
+  // Equipamentos no mobile (tela estreita), não só no desktop. 480 fixo
+  // quebrava em celular; usa até 480 ou 90% da tela, o que for menor.
+  final maxWidth = MediaQuery.of(context).size.width * 0.9;
+  final dialogWidth = maxWidth < 480 ? maxWidth : 480.0;
   gFFI.dialogManager.show((setState, close, context) {
     return CustomAlertDialog(
       title: Text(item.hostname),
       content: SizedBox(
-        width: 480,
+        width: dialogWidth,
         child: _EquipmentDetailBody(item: item),
       ),
       actions: [
