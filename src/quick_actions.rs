@@ -789,6 +789,9 @@ struct CollectedSignals {
     // de disk/power/windows_health (hashear todo processo a cada 60s
     // seria custo/ruído desnecessário).
     process_hashes: Option<Vec<Value>>,
+    // Fase 5 (tela de informações estilo AIDA64) -- mesmo motivo, tick
+    // estendido só.
+    system_info: Option<Value>,
 }
 
 #[cfg(windows)]
@@ -819,6 +822,7 @@ async fn sensor_loop_async() {
                 power_health: None,
                 windows_health: None,
                 process_hashes: None,
+                system_info: None,
             },
         };
         // Item 3 (teste real nas lojas 2026-09-11): "Online" no Equipment
@@ -845,6 +849,7 @@ async fn sensor_loop_async() {
             "power_health": signals.power_health,
             "windows_health": signals.windows_health,
             "rendezvous_reachable": rendezvous_reachable,
+            "system_info": signals.system_info,
         })
         .to_string();
         let sensors_url = format!("{}/api/sensors", url);
@@ -885,6 +890,7 @@ fn collect_all_signals(run_extended: bool) -> CollectedSignals {
             power_health: None,
             windows_health: None,
             process_hashes: None,
+            system_info: None,
         };
     }
     CollectedSignals {
@@ -894,6 +900,7 @@ fn collect_all_signals(run_extended: bool) -> CollectedSignals {
         power_health: collect_power_health(),
         windows_health: collect_windows_health(),
         process_hashes: scan_processos_hashes(),
+        system_info: collect_system_info(),
     }
 }
 
@@ -999,6 +1006,33 @@ fn collect_windows_health() -> Option<Value> {
          $reboot_pending = (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending') -or \
              (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired'); \
          @{critical_events_24h=$erros; stopped_services=@($servicos); disks_low_space=@($discos_criticos); reboot_pending=$reboot_pending} | ConvertTo-Json -Compress -Depth 4",
+    );
+    if status != "done" {
+        return None;
+    }
+    out.get("stdout")
+        .and_then(|s| s.as_str())
+        .and_then(|s| serde_json::from_str(s).ok())
+}
+
+/// Tela de informações do sistema estilo AIDA64 (Fase 5) -- não dá pra
+/// embutir o AIDA64 real (pago, fechado), então completa via WMI o que já
+/// não vem do `sysinfo`/`hwsensor-helper` (CPU/RAM/nomes de GPU e disco):
+/// placa-mãe, monitor(es), dispositivo(s) de áudio e adaptador(es) de rede.
+/// Roda só no tick estendido (mesmo motivo de disk/power/windows_health):
+/// nada disso muda em segundos.
+#[cfg(windows)]
+fn collect_system_info() -> Option<Value> {
+    let (status, out) = run_powershell(
+        "$placa_mae = Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue | \
+             Select-Object Manufacturer,Product,SerialNumber; \
+         $monitores = Get-CimInstance Win32_DesktopMonitor -ErrorAction SilentlyContinue | \
+             Select-Object Name,ScreenWidth,ScreenHeight; \
+         $audio = Get-CimInstance Win32_SoundDevice -ErrorAction SilentlyContinue | \
+             Select-Object Name,Manufacturer,Status; \
+         $rede = Get-CimInstance Win32_NetworkAdapter -Filter 'PhysicalAdapter=True' -ErrorAction SilentlyContinue | \
+             Select-Object Name,MACAddress,NetConnectionStatus,Speed; \
+         @{placa_mae=$placa_mae; monitores=$monitores; audio=$audio; rede=$rede} | ConvertTo-Json -Compress -Depth 4",
     );
     if status != "done" {
         return None;
