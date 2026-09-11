@@ -68,6 +68,8 @@ fn execute(cmd: &PendingCommand) -> (String, Value) {
         "reset_printers" => reset_printers(),
         "reset_com_ports" => reset_com_ports(),
         "install_driver" => install_driver(cmd),
+        "scan_processos" => scan_processos(),
+        "defender_full_scan" => defender_full_scan(),
         other => (
             "failed".to_owned(),
             json!({"error": format!("ação desconhecida: {other}")}),
@@ -551,6 +553,181 @@ fn install_driver(cmd: &PendingCommand) -> (String, Value) {
     }
 }
 
+// --- Fase 2 do roadmap: antivírus em camadas -----------------------------
+//
+// Processos rodando são hasheados (SHA-256) AQUI no cliente -- a chave do
+// VirusTotal NUNCA fica no binário distribuído (extraível via strings),
+// então quem bate nas APIs externas (CIRCL/MalwareBazaar/VirusTotal) é o
+// bridge, com a chave só em .env (mesmo padrão do TELEGRAM_BOT_TOKEN).
+// Este arquivo só coleta hash + nome + caminho e reporta -- nunca decide
+// sozinho apagar/quarentenar nada (só alerta).
+
+/// Processos e pastas do sistema Windows -- nunca faz sentido hashear
+/// (portado de PROCESSOS_SISTEMA/PASTAS_SISTEMA em
+/// C:\projetos\Beta Cube Monitor\security_scanner.py).
+#[cfg(windows)]
+const PROCESSOS_SISTEMA: &[&str] = &[
+    "System", "Registry", "smss.exe", "csrss.exe", "wininit.exe",
+    "winlogon.exe", "services.exe", "lsass.exe", "fontdrvhost.exe",
+    "dwm.exe", "conhost.exe", "svchost.exe", "spoolsv.exe",
+    "taskhostw.exe", "sihost.exe", "RuntimeBroker.exe", "SearchHost.exe",
+    "StartMenuExperienceHost.exe", "TextInputHost.exe", "ShellExperienceHost.exe",
+    "explorer.exe", "ctfmon.exe", "dllhost.exe", "WmiPrvSE.exe",
+    "MsMpEng.exe", "NisSrv.exe", "SecurityHealthService.exe",
+    "audiodg.exe", "wlanext.exe", "dasHost.exe", "LSM.exe",
+];
+
+#[cfg(windows)]
+const PASTAS_SISTEMA: &[&str] = &[
+    "c:\\windows\\system32",
+    "c:\\windows\\syswow64",
+    "c:\\windows\\winsxs",
+    "c:\\program files\\windows defender",
+    "c:\\program files\\microsoft",
+    "c:\\program files (x86)\\microsoft",
+];
+
+#[cfg(windows)]
+fn eh_pasta_sistema(caminho: &str) -> bool {
+    let lower = caminho.to_lowercase();
+    PASTAS_SISTEMA.iter().any(|p| lower.starts_with(p))
+}
+
+#[cfg(windows)]
+fn sha256_arquivo(caminho: &str) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(caminho).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+/// Lista processos rodando (via `Get-CimInstance Win32_Process`, mesmo
+/// padrão já usado em `restart_services_matching`), pula processo/pasta
+/// de sistema, hasheia o executável de cada um que sobrar.
+#[cfg(windows)]
+fn scan_processos_hashes() -> Option<Vec<Value>> {
+    let (status, out) = run_powershell(
+        "Get-CimInstance Win32_Process | Select-Object Name,ExecutablePath | ConvertTo-Json -Compress",
+    );
+    if status != "done" {
+        return None;
+    }
+    let parsed: Value = out
+        .get("stdout")
+        .and_then(|s| s.as_str())
+        .and_then(|s| serde_json::from_str(s).ok())?;
+    let items: Vec<Value> = match parsed {
+        Value::Array(arr) => arr,
+        other => vec![other],
+    };
+    let mut result = Vec::new();
+    let mut vistos = std::collections::HashSet::new();
+    for item in items {
+        let name = item.get("Name").and_then(|v| v.as_str()).unwrap_or("");
+        let path = match item.get("ExecutablePath").and_then(|v| v.as_str()) {
+            Some(p) if !p.is_empty() => p,
+            _ => continue,
+        };
+        if PROCESSOS_SISTEMA.iter().any(|s| s.eq_ignore_ascii_case(name)) {
+            continue;
+        }
+        if eh_pasta_sistema(path) {
+            continue;
+        }
+        // O mesmo executável costuma aparecer em várias instâncias
+        // (múltiplos processos do mesmo programa) -- hasheia só uma vez.
+        if !vistos.insert(path.to_lowercase()) {
+            continue;
+        }
+        if let Some(hash) = sha256_arquivo(path) {
+            result.push(json!({"sha256": hash, "nome": name, "caminho": path}));
+        }
+    }
+    Some(result)
+}
+
+/// Ação Rápida manual: mesma coleta do loop, mas dispara na hora e
+/// reporta pro bridge (`POST /api/check_hashes`) de dentro da própria
+/// ação -- mesmo padrão de `handle.block_on(...)` já usado em
+/// `dispatch()` pra reportar resultado de comando.
+#[cfg(windows)]
+fn scan_processos() -> (String, Value) {
+    let hashes = match scan_processos_hashes() {
+        Some(h) => h,
+        None => return ("failed".to_owned(), json!({"error": "falha ao listar processos"})),
+    };
+    if hashes.is_empty() {
+        return (
+            "done".to_owned(),
+            json!({"checked": 0, "note": "nenhum processo fora da lista de confiança encontrado"}),
+        );
+    }
+    let base = crate::common::get_api_server(
+        hbb_common::config::Config::get_option("api-server"),
+        hbb_common::config::Config::get_option("custom-rendezvous-server"),
+    );
+    if base.is_empty() {
+        return (
+            "failed".to_owned(),
+            json!({"error": "api-server não configurado"}),
+        );
+    }
+    let id = hbb_common::config::Config::get_id();
+    let checked = hashes.len();
+    let body = json!({"id": id, "files": hashes}).to_string();
+    let url = format!("{}/api/check_hashes", base);
+    let handle = tokio::runtime::Handle::current();
+    match handle.block_on(crate::post_request(url, body, "")) {
+        Ok(resp) => ("done".to_owned(), json!({"checked": checked, "bridge_response": resp})),
+        Err(e) => ("failed".to_owned(), json!({"error": e.to_string()})),
+    }
+}
+
+/// Camada 0 (grátis) do antivírus em camadas: scan completo do próprio
+/// Windows Defender, usando o motor da Microsoft já instalado -- sem
+/// custo, sem limite de chamada, sem subir arquivo pra lugar nenhum.
+/// Diferente de scan_processos (que só REPORTA), aqui o Defender faz a
+/// remediação normal dele (decide sozinho o que quarentenar) -- é
+/// antivírus de verdade, não é nosso código decidindo apagar algo.
+/// Portado de windows_defender_scan.py.
+#[cfg(windows)]
+fn localizar_mpcmdrun() -> Option<String> {
+    let base = r"C:\ProgramData\Microsoft\Windows Defender\Platform";
+    let mut versoes: Vec<String> = std::fs::read_dir(base)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    versoes.sort();
+    if let Some(ultima) = versoes.last() {
+        let candidato = format!("{}\\{}\\MpCmdRun.exe", base, ultima);
+        if std::path::Path::new(&candidato).exists() {
+            return Some(candidato);
+        }
+    }
+    let fallback = r"C:\Program Files\Windows Defender\MpCmdRun.exe";
+    if std::path::Path::new(fallback).exists() {
+        return Some(fallback.to_owned());
+    }
+    None
+}
+
+#[cfg(windows)]
+fn defender_full_scan() -> (String, Value) {
+    let Some(mpcmdrun) = localizar_mpcmdrun() else {
+        return (
+            "failed".to_owned(),
+            json!({"error": "MpCmdRun.exe não encontrado -- Windows Defender pode estar desativado ou substituído por outro antivírus"}),
+        );
+    };
+    // Scan completo pode levar horas num disco grande -- roda do mesmo
+    // jeito que sfc/DISM (bloqueia dentro do spawn_blocking já usado por
+    // dispatch(), sem timeout artificial nosso).
+    run_capture(&mpcmdrun, &["-Scan", "-ScanType", "2"])
+}
+
 // --- Loop periódico de sensores/drivers (relatado pro bridge, não vem de comando) ---
 
 const SENSOR_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
@@ -571,6 +748,19 @@ pub fn start_sensor_loop() {
 pub fn start_sensor_loop() {}
 
 #[cfg(windows)]
+struct CollectedSignals {
+    sensors: Option<Value>,
+    driver_issues: Option<Value>,
+    disk_health: Option<Value>,
+    power_health: Option<Value>,
+    windows_health: Option<Value>,
+    // Fase 2 (antivírus) -- só coletado no tick estendido, mesmo motivo
+    // de disk/power/windows_health (hashear todo processo a cada 60s
+    // seria custo/ruído desnecessário).
+    process_hashes: Option<Vec<Value>>,
+}
+
+#[cfg(windows)]
 #[tokio::main(flavor = "current_thread")]
 async fn sensor_loop_async() {
     let mut interval = tokio::time::interval(SENSOR_REPORT_INTERVAL);
@@ -589,32 +779,46 @@ async fn sensor_loop_async() {
         let run_extended = tick % EXTENDED_CHECK_EVERY_N_TICKS == 0;
         tick = tick.wrapping_add(1);
 
-        let (sensors, driver_issues, disk_health, power_health, windows_health) =
-            match tokio::task::spawn_blocking(move || collect_all_signals(run_extended)).await {
-                Ok(x) => x,
-                Err(_) => (None, None, None, None, None),
-            };
+        let signals = match tokio::task::spawn_blocking(move || collect_all_signals(run_extended)).await {
+            Ok(x) => x,
+            Err(_) => CollectedSignals {
+                sensors: None,
+                driver_issues: None,
+                disk_health: None,
+                power_health: None,
+                windows_health: None,
+                process_hashes: None,
+            },
+        };
         let body = json!({
             "id": id,
             "uuid": uuid,
-            "sensors": sensors,
-            "driver_issues": driver_issues,
-            "disk_health": disk_health,
-            "power_health": power_health,
-            "windows_health": windows_health,
+            "sensors": signals.sensors,
+            "driver_issues": signals.driver_issues,
+            "disk_health": signals.disk_health,
+            "power_health": signals.power_health,
+            "windows_health": signals.windows_health,
         })
         .to_string();
         let sensors_url = format!("{}/api/sensors", url);
         if let Err(e) = crate::post_request(sensors_url, body, "").await {
             log::error!("Falha reportando sensores: {}", e);
         }
+
+        if let Some(hashes) = signals.process_hashes {
+            if !hashes.is_empty() {
+                let hashes_body = json!({"id": id, "files": hashes}).to_string();
+                let hashes_url = format!("{}/api/check_hashes", url);
+                if let Err(e) = crate::post_request(hashes_url, hashes_body, "").await {
+                    log::error!("Falha reportando hashes de processo: {}", e);
+                }
+            }
+        }
     }
 }
 
 #[cfg(windows)]
-fn collect_all_signals(
-    run_extended: bool,
-) -> (Option<Value>, Option<Value>, Option<Value>, Option<Value>, Option<Value>) {
+fn collect_all_signals(run_extended: bool) -> CollectedSignals {
     let sensors = read_hw_sensors();
     let (status, result) = list_driver_issues();
     let driver_issues = if status == "done" {
@@ -627,15 +831,23 @@ fn collect_all_signals(
         None
     };
     if !run_extended {
-        return (sensors, driver_issues, None, None, None);
+        return CollectedSignals {
+            sensors,
+            driver_issues,
+            disk_health: None,
+            power_health: None,
+            windows_health: None,
+            process_hashes: None,
+        };
     }
-    (
+    CollectedSignals {
         sensors,
         driver_issues,
-        collect_disk_health(),
-        collect_power_health(),
-        collect_windows_health(),
-    )
+        disk_health: collect_disk_health(),
+        power_health: collect_power_health(),
+        windows_health: collect_windows_health(),
+        process_hashes: scan_processos_hashes(),
+    }
 }
 
 /// Saúde nativa de disco via Windows Storage (sem smartctl/terceiros) --

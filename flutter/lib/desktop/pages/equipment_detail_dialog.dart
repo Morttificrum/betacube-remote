@@ -334,6 +334,8 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
         _driverPickerButton(),
         _actionButton('restart_services', 'Tomcat', params: {'name_contains': ['tomcat']}),
         _actionButton('restart_services', 'SITEF', params: {'name_contains': ['WNBMonitor', 'WNBTLSclient']}),
+        _actionButton('scan_processos', translate('Scan running processes')),
+        _actionButton('defender_full_scan', translate('Defender full scan')),
         _sensitiveActionButton('disable_defender', '${translate("Disable")} Windows Defender'),
         _sensitiveActionButton('disable_firewall', '${translate("Disable")} Windows Firewall'),
       ],
