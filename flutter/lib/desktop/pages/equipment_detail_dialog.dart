@@ -49,11 +49,19 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
   bool _historyLoading = false;
   List<Map<String, dynamic>> _commandHistory = [];
 
+  bool _eventsLoading = false;
+  List<Map<String, dynamic>> _events = [];
+
+  // Fase 5: placa-mãe/monitor(es)/áudio/rede via WMI, estilo AIDA64 --
+  // vem no mesmo tick estendido de disk/power/windows_health.
+  Map<String, dynamic>? _systemInfo;
+
   @override
   void initState() {
     super.initState();
     _load();
     _loadHistory();
+    _loadEvents();
   }
 
   Future<void> _load() async {
@@ -65,6 +73,8 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
       _sensors = sensors is List ? sensors : [];
       final issues = data?['driver_issues'];
       _driverIssues = issues is List ? issues : (issues == null ? [] : [issues]);
+      final sysinfo = data?['system_info'];
+      _systemInfo = sysinfo is Map ? Map<String, dynamic>.from(sysinfo) : null;
     });
   }
 
@@ -80,6 +90,22 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
     setState(() {
       _historyLoading = false;
       _commandHistory = history;
+    });
+  }
+
+  /// Log de auditoria (Fase 4): conectar/login/desconectar, transferência
+  /// de arquivo com direção, e alarmes de segurança (força-bruta,
+  /// whitelist de IP) -- os dados já fluíam pro bridge desde a Fase 3, só
+  /// não tinha tela nenhuma usando isso ainda.
+  Future<void> _loadEvents() async {
+    final rustdeskId = widget.item.rustdeskId;
+    if (rustdeskId == null || rustdeskId.isEmpty) return;
+    setState(() => _eventsLoading = true);
+    final events = await gFFI.equipmentModel.listEvents(rustdeskId);
+    if (!mounted) return;
+    setState(() {
+      _eventsLoading = false;
+      _events = events;
     });
   }
 
@@ -169,6 +195,8 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
         const SizedBox(height: 12),
         if (_driverIssues.isNotEmpty) _buildDriverIssues(),
         const SizedBox(height: 12),
+        if (_systemInfo != null) _buildSystemInfo(),
+        if (_systemInfo != null) const SizedBox(height: 12),
         Text(translate('Quick Actions'), style: const TextStyle(fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
         _buildActions(),
@@ -179,6 +207,8 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
           ),
         const SizedBox(height: 12),
         _buildCommandHistory(),
+        const SizedBox(height: 12),
+        _buildEventLog(),
       ],
     );
   }
@@ -292,6 +322,125 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
     );
   }
 
+  Widget _buildEventLog() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(translate('Connection log'), style: const TextStyle(fontWeight: FontWeight.bold)),
+            const Spacer(),
+            IconButton(
+              icon: const Icon(Icons.refresh, size: 18),
+              tooltip: translate('Refresh'),
+              onPressed: _eventsLoading ? null : _loadEvents,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        if (_eventsLoading) const LinearProgressIndicator(),
+        if (!_eventsLoading && _events.isEmpty) Text(translate('Empty')),
+        if (_events.isNotEmpty)
+          SizedBox(
+            height: 220,
+            child: ListView.separated(
+              itemCount: _events.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (ctx, i) => _eventTile(_events[i]),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _eventTile(Map<String, dynamic> row) {
+    final type = row['type']?.toString() ?? '';
+    final payload = row['payload'] is Map
+        ? Map<String, dynamic>.from(row['payload'] as Map)
+        : <String, dynamic>{};
+    final createdAt = (row['created_at'] as num?)?.toDouble();
+
+    IconData icon;
+    Color color;
+    String summary;
+
+    switch (type) {
+      case 'conn':
+        final action = payload['action']?.toString();
+        if (action == 'new') {
+          icon = Icons.link;
+          color = Colors.blue;
+          final ip = payload['ip']?.toString() ?? '';
+          summary = '${translate("New connection")} ($ip)';
+        } else if (action == 'close') {
+          icon = Icons.link_off;
+          color = Colors.grey;
+          summary = translate('Connection closed');
+        } else {
+          // Sem "action" == evento de login (ver connection.rs, ~linha 1657):
+          // tem "peer" ([my_id, my_name]) em vez disso.
+          icon = Icons.login;
+          color = Colors.green;
+          final peer = payload['peer'];
+          final peerName = (peer is List && peer.length > 1) ? peer[1]?.toString() : null;
+          summary = '${translate("Login")}${peerName != null && peerName.isNotEmpty ? ": $peerName" : ""}';
+        }
+        break;
+      case 'file':
+        // RemoteSend (0) = o equipamento enviou pro técnico (download);
+        // RemoteReceive (1) = o técnico enviou pro equipamento (upload).
+        // Ver FileAuditType/post_file_audit em connection.rs.
+        final fileType = (payload['type'] as num?)?.toInt();
+        final isSend = fileType == 0;
+        icon = isSend ? Icons.arrow_upward : Icons.arrow_downward;
+        color = isSend ? Colors.teal : Colors.indigo;
+        final info = payload['info'];
+        Map<String, dynamic> infoMap = {};
+        if (info is String) {
+          try {
+            infoMap = Map<String, dynamic>.from(jsonDecode(info) as Map);
+          } catch (_) {}
+        } else if (info is Map) {
+          infoMap = Map<String, dynamic>.from(info);
+        }
+        final num_ = infoMap['num']?.toString();
+        summary = isSend
+            ? translate('File sent to technician')
+            : translate('File received from technician');
+        if (num_ != null && num_ != '1') summary += ' ($num_)';
+        break;
+      case 'alarm':
+        icon = Icons.warning_amber;
+        color = Colors.red;
+        final typ = (payload['typ'] as num?)?.toInt();
+        const labels = {
+          0: 'IP not in whitelist',
+          1: 'Too many login attempts',
+          2: '6 attempts within one minute',
+          6: 'Too many IPv6-prefix attempts',
+          7: 'Terminal OS login backoff',
+        };
+        summary = translate(labels[typ] ?? 'Security alarm');
+        break;
+      default:
+        icon = Icons.circle;
+        color = Colors.grey;
+        summary = type;
+    }
+
+    return ListTile(
+      dense: true,
+      visualDensity: VisualDensity.compact,
+      leading: Icon(icon, size: 16, color: color),
+      title: Text(summary, style: const TextStyle(fontSize: 13)),
+      subtitle: createdAt != null
+          ? Text(_relativeTime(createdAt), style: const TextStyle(fontSize: 11))
+          : null,
+    );
+  }
+
   Widget _buildSensors() {
     if (_sensors.isEmpty) {
       return Text(translate('Empty'));
@@ -315,6 +464,67 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
       children: [
         Text(translate('Driver issues'), style: const TextStyle(fontWeight: FontWeight.bold)),
         ..._driverIssues.map((d) => Text('• ${d['FriendlyName'] ?? d.toString()}')),
+      ],
+    );
+  }
+
+  /// Fase 5: tela de informações do sistema estilo AIDA64 (própria, via
+  /// WMI -- não dá pra embutir o AIDA64 real). Completa o que já vem por
+  /// outros meios (CPU/RAM/GPU/disco, já mostrados em `_buildSensors`).
+  Widget _buildSystemInfo() {
+    final info = _systemInfo!;
+    final lines = <String>[];
+
+    final board = info['placa_mae'];
+    final boardMap = board is List && board.isNotEmpty
+        ? Map<String, dynamic>.from(board.first as Map)
+        : (board is Map ? Map<String, dynamic>.from(board) : null);
+    if (boardMap != null) {
+      final manufacturer = boardMap['Manufacturer']?.toString() ?? '';
+      final product = boardMap['Product']?.toString() ?? '';
+      if (manufacturer.isNotEmpty || product.isNotEmpty) {
+        lines.add('${translate("Motherboard")}: $manufacturer $product'.trim());
+      }
+    }
+
+    final monitors = info['monitores'];
+    final monitorList = monitors is List ? monitors : (monitors is Map ? [monitors] : []);
+    for (final m in monitorList) {
+      final mm = Map<String, dynamic>.from(m as Map);
+      final name = mm['Name']?.toString() ?? '';
+      final w = mm['ScreenWidth'];
+      final h = mm['ScreenHeight'];
+      if (name.isNotEmpty) {
+        lines.add('${translate("Monitor")}: $name${w != null && h != null ? " (${w}x$h)" : ""}');
+      }
+    }
+
+    final audio = info['audio'];
+    final audioList = audio is List ? audio : (audio is Map ? [audio] : []);
+    for (final a in audioList) {
+      final am = Map<String, dynamic>.from(a as Map);
+      final name = am['Name']?.toString() ?? '';
+      if (name.isNotEmpty) lines.add('${translate("Audio")}: $name');
+    }
+
+    final network = info['rede'];
+    final networkList = network is List ? network : (network is Map ? [network] : []);
+    for (final n in networkList) {
+      final nm = Map<String, dynamic>.from(n as Map);
+      final name = nm['Name']?.toString() ?? '';
+      final mac = nm['MACAddress']?.toString();
+      if (name.isNotEmpty) {
+        lines.add('${translate("Network")}: $name${mac != null && mac.isNotEmpty ? " ($mac)" : ""}');
+      }
+    }
+
+    if (lines.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(translate('System information'), style: const TextStyle(fontWeight: FontWeight.bold)),
+        ...lines.map((l) => Text(l, style: const TextStyle(fontSize: 13))),
       ],
     );
   }
