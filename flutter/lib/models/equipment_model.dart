@@ -171,6 +171,32 @@ class EquipmentModel {
     }
   }
 
+  /// Log de auditoria de conexão (Fase 4) -- conectar/login/desconectar
+  /// (type="conn"), transferência de arquivo com direção (type="file") e
+  /// violações de segurança tipo força-bruta/whitelist (type="alarm").
+  /// `payload_json` vem como string -- decodificado aqui, não no bridge,
+  /// pra manter o endpoint genérico (mesmo dado bruto que fica no banco).
+  Future<List<Map<String, dynamic>>> listEvents(String rustdeskId, {int limit = 100}) async {
+    final api = await bind.mainGetApiServer();
+    if (api.isEmpty) return [];
+    try {
+      final resp = await http.get(Uri.parse('$api/internal/events?rustdesk_id=$rustdeskId&limit=$limit'));
+      if (resp.statusCode != 200) return [];
+      final List list = jsonDecode(resp.body);
+      return list.map((e) {
+        final row = Map<String, dynamic>.from(e as Map);
+        try {
+          row['payload'] = jsonDecode(row['payload_json'] as String? ?? '{}');
+        } catch (_) {
+          row['payload'] = {};
+        }
+        return row;
+      }).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
   /// Enfileira uma Ação Rápida pro device — executa no próximo contato
   /// (heartbeat) da máquina com o bridge, não é instantâneo. Devolve o id
   /// do comando, ou null se não deu pra enfileirar.
