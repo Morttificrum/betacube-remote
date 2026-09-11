@@ -14,6 +14,7 @@ import 'package:betacube_remote/common/widgets/peers_view.dart';
 import 'package:betacube_remote/consts.dart';
 import 'package:betacube_remote/models/ab_model.dart';
 import 'package:betacube_remote/models/equipment_model.dart';
+import 'package:betacube_remote/models/network_model.dart';
 import 'package:betacube_remote/models/chat_model.dart';
 import 'package:betacube_remote/models/cm_file_model.dart';
 import 'package:betacube_remote/models/file_model.dart';
@@ -3647,6 +3648,7 @@ class FFI {
   late final FileModel fileModel; // session
   late final AbModel abModel; // global
   late final EquipmentModel equipmentModel; // global
+  late final NetworkModel networkModel; // global
   late final GroupModel groupModel; // global
   late final UserModel userModel; // global
   late final PeerTabModel peerTabModel; // global
@@ -3679,6 +3681,7 @@ class FFI {
     peerTabModel = PeerTabModel(WeakReference(this));
     abModel = AbModel(WeakReference(this));
     equipmentModel = EquipmentModel(WeakReference(this));
+    networkModel = NetworkModel(WeakReference(this));
     groupModel = GroupModel(WeakReference(this));
     qualityMonitorModel = QualityMonitorModel(WeakReference(this));
     recordingModel = RecordingModel(WeakReference(this));

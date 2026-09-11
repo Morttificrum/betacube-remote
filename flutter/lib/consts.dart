@@ -220,6 +220,7 @@ const String kUrlActionClose = "close";
 
 const String kTabLabelHomePage = "Home";
 const String kTabLabelEquipmentPage = "Equipment";
+const String kTabLabelNetworkPage = "Network";
 const String kTabLabelSettingPage = "Settings";
 
 const String kWindowPrefix = "wm_";

@@ -3,6 +3,7 @@ import 'package:betacube_remote/common.dart';
 import 'package:betacube_remote/consts.dart';
 import 'package:betacube_remote/desktop/pages/desktop_home_page.dart';
 import 'package:betacube_remote/desktop/pages/equipment_page.dart';
+import 'package:betacube_remote/desktop/pages/network_page.dart';
 import 'package:betacube_remote/desktop/pages/desktop_setting_page.dart';
 import 'package:betacube_remote/desktop/widgets/tabbar_widget.dart';
 import 'package:betacube_remote/models/platform_model.dart';
@@ -61,9 +62,16 @@ class _DesktopTabPageState extends State<DesktopTabPage> {
           unselectedIcon: Icons.computer,
           closable: false,
           page: const EquipmentPage()));
+      tabController.add(TabInfo(
+          key: kTabLabelNetworkPage,
+          label: kTabLabelNetworkPage,
+          selectedIcon: Icons.router,
+          unselectedIcon: Icons.router,
+          closable: false,
+          page: const NetworkPage()));
       // `add` always jumps to the tab it just added, so without this the
-      // app opens on Equipment instead of Home on every launch -- not what
-      // a technician wants staring back at them on a store PC.
+      // app opens on Equipment/Network instead of Home on every launch --
+      // not what a technician wants staring back at them on a store PC.
       tabController.jumpTo(0, callOnSelected: false);
     }
     if (bind.isIncomingOnly()) {
