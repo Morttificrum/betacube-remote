@@ -66,6 +66,8 @@ fn execute(cmd: &PendingCommand) -> (String, Value) {
         "list_driver_issues" => list_driver_issues(),
         "list_usb_devices" => list_usb_devices(),
         "reset_printers" => reset_printers(),
+        "list_printers" => list_printers(),
+        "reset_printer" => reset_printer(cmd),
         "reset_com_ports" => reset_com_ports(),
         "reinstall_usb_devices" => reinstall_usb_devices(),
         "install_driver" => install_driver(cmd),
@@ -315,6 +317,77 @@ fn reset_printers() -> (String, Value) {
             "note": "filas e drivers de impressora removidos -- reinstale via Plug and Play ou instalador do fabricante",
         }),
     )
+}
+
+/// Lista as impressoras instaladas na máquina (nome, driver, porta,
+/// status) -- alimenta o seletor de "Resetar impressora (individual)"
+/// no Flutter, já que reset_printer() abaixo precisa saber o nome exato
+/// de uma impressora específica pra agir só nela.
+#[cfg(windows)]
+fn list_printers() -> (String, Value) {
+    run_powershell(
+        "Get-Printer -ErrorAction SilentlyContinue | \
+         Select-Object Name,DriverName,PortName,PrinterStatus | ConvertTo-Json -Compress",
+    )
+}
+
+/// Reset de UMA impressora só, isolado -- diferente do "Unstick printer"
+/// (só limpa fila, leve) e do "Resetar impressoras" acima (remove TODAS,
+/// agressivo). Prioridade alta: pinpad/impressora fiscal que trava
+/// sozinha é o problema mais comum reportado nas lojas (5-8x/dia), e até
+/// agora só dava pra resolver removendo TODAS as impressoras da máquina
+/// de uma vez -- inaceitável numa loja com várias impressoras/pinpads
+/// funcionando ao mesmo tempo.
+///
+/// Nunca para/reinicia o serviço Spooler (isso afetaria as filas de
+/// TODAS as impressoras, mesmo que só por um instante) -- só usa os
+/// cmdlets `Get-PrintJob`/`Remove-Printer`/`Remove-PrinterDriver`, que já
+/// lidam com o lock de arquivo internamente sem precisar do serviço
+/// inteiro parado.
+///
+/// Só remove o driver do driver store se NENHUMA outra impressora
+/// instalada ainda usar o mesmo driver -- evita quebrar uma impressora
+/// vizinha que compartilhe o mesmo driver de fábrica (comum entre
+/// modelos da mesma marca, ex. várias Epson TM-T20 na mesma loja).
+#[cfg(windows)]
+fn reset_printer(cmd: &PendingCommand) -> (String, Value) {
+    let printer_name = match cmd.params.get("printer_name").and_then(|v| v.as_str()) {
+        Some(n) if !n.is_empty() => n.to_owned(),
+        _ => return ("failed".to_owned(), json!({"error": "printer_name é obrigatório"})),
+    };
+    // Nome de impressora praticamente nunca tem aspas simples, mas evita
+    // quebrar o script gerado se algum dia tiver.
+    let escaped = printer_name.replace('\'', "''");
+    let (status, dump) = run_powershell(&format!(
+        "$target = '{escaped}'; \
+         $printer = Get-Printer -Name $target -ErrorAction SilentlyContinue; \
+         if (-not $printer) {{ \
+             @{{error='impressora não encontrada'; printer=$target}} | ConvertTo-Json -Compress; \
+         }} else {{ \
+             $driver = $printer.DriverName; \
+             Get-PrintJob -PrinterName $target -ErrorAction SilentlyContinue | Remove-PrintJob -ErrorAction SilentlyContinue; \
+             Remove-Printer -Name $target -ErrorAction SilentlyContinue; \
+             $stillSharing = @(Get-Printer -ErrorAction SilentlyContinue | Where-Object {{ $_.DriverName -eq $driver }}); \
+             $driverRemoved = $false; \
+             if ($stillSharing.Count -eq 0) {{ \
+                 Remove-PrinterDriver -Name $driver -RemoveFromDriverStore -ErrorAction SilentlyContinue; \
+                 $driverRemoved = $true; \
+             }}; \
+             @{{printer=$target; driver=$driver; driver_removed=$driverRemoved; shared_with_other_printers=($stillSharing.Count -gt 0)}} | ConvertTo-Json -Compress; \
+         }}"
+    ));
+    // O script sempre sai com exit code 0 (só decide o QUE imprimir), pra
+    // ter um único formato de saída -- "não encontrada" tem que virar
+    // status "failed" pro histórico de comandos no Flutter mostrar
+    // vermelho, não verde, então checa o JSON em si.
+    let has_error = dump
+        .get("stdout")
+        .and_then(|s| s.as_str())
+        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+        .and_then(|v| v.get("error").cloned())
+        .is_some();
+    let final_status = if status == "done" && !has_error { "done" } else { "failed" };
+    (final_status.to_owned(), dump)
 }
 
 /// Porta COM "fantasma" -- comum depois de troca de equipamento USB

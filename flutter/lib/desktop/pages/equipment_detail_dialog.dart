@@ -128,6 +128,7 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
   }
 
   bool _driverPickerLoading = false;
+  bool _printerPickerLoading = false;
 
   /// "Instalar driver" (Fase 4): busca o que tem no pacote hospedado pelo
   /// bridge e deixa o técnico escolher -- ao contrário da impressora, aqui
@@ -177,6 +178,123 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// "Reset printer (individual)" -- pedido de prioridade alta: impressora/
+  /// pinpad travado é o problema mais comum reportado nas lojas (5-8x/dia),
+  /// e até aqui só dava pra resolver com "Reset printers" (remove TODAS de
+  /// uma vez) ou manualmente. Diferente do driver picker acima (lista
+  /// estática hospedada pelo bridge), a lista de impressoras só existe na
+  /// própria máquina remota -- precisa enfileirar `list_printers` e
+  /// esperar o próximo contato (heartbeat ~3s) trazer o resultado, então
+  /// faz polling curto no histórico de comandos até aparecer "done"/
+  /// "failed" (mesmo dado que _showCommandResult já sabe decodificar).
+  Future<void> _openPrinterPicker() async {
+    final rustdeskId = widget.item.rustdeskId;
+    if (rustdeskId == null || rustdeskId.isEmpty) return;
+    setState(() => _printerPickerLoading = true);
+    final commandId = await gFFI.equipmentModel.enqueueCommand(rustdeskId, 'list_printers');
+    if (commandId == null) {
+      if (!mounted) return;
+      setState(() {
+        _printerPickerLoading = false;
+        _lastActionMessage = '${translate("List printers")}: ${translate("falha ao enviar comando")}';
+      });
+      return;
+    }
+
+    Map<String, dynamic>? resultCmd;
+    // 20 tentativas de 1s -- folga generosa sobre o pickup de ~3s do
+    // heartbeat + tempo de execução, sem deixar o técnico esperando
+    // indefinidamente se a máquina estiver offline/lenta.
+    for (var i = 0; i < 20; i++) {
+      await Future.delayed(const Duration(seconds: 1));
+      final history = await gFFI.equipmentModel.listCommands(rustdeskId, limit: 20);
+      for (final c in history) {
+        if (c['id'] == commandId) {
+          final status = c['status']?.toString();
+          if (status == 'done' || status == 'failed') {
+            resultCmd = c;
+          }
+          break;
+        }
+      }
+      if (resultCmd != null) break;
+    }
+
+    if (!mounted) return;
+    setState(() => _printerPickerLoading = false);
+
+    if (resultCmd == null) {
+      setState(() => _lastActionMessage =
+          translate('Máquina não respondeu a tempo -- confira o histórico de comandos'));
+      return;
+    }
+    if (resultCmd['status'] != 'done') {
+      setState(() => _lastActionMessage = '${translate("List printers")}: ${translate("falhou")}');
+      return;
+    }
+
+    List<Map<String, dynamic>> printers = [];
+    try {
+      final resultJson = resultCmd['result_json'] as String?;
+      final parsed = jsonDecode(resultJson != null && resultJson.isNotEmpty ? resultJson : '{}');
+      final stdout = parsed['stdout']?.toString() ?? '';
+      final printerData = jsonDecode(stdout.isNotEmpty ? stdout : '[]');
+      if (printerData is List) {
+        printers = printerData.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      } else if (printerData is Map) {
+        printers = [Map<String, dynamic>.from(printerData)];
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
+    if (printers.isEmpty) {
+      setState(() => _lastActionMessage = translate('Nenhuma impressora instalada encontrada'));
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(translate('Reset printer (individual)')),
+        content: SizedBox(
+          width: 420,
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemCount: printers.length,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (context, i) {
+              final p = printers[i];
+              final name = p['Name']?.toString() ?? '';
+              final port = p['PortName']?.toString() ?? '';
+              return ListTile(
+                dense: true,
+                title: Text(name),
+                subtitle: Text(port),
+                trailing: IconButton(
+                  icon: const Icon(Icons.restart_alt, color: Colors.red),
+                  tooltip: translate('Reset'),
+                  onPressed: name.isEmpty
+                      ? null
+                      : () {
+                          Navigator.of(ctx).pop();
+                          deleteConfirmDialog(
+                              () async => await _runAction('reset_printer',
+                                  params: {'printer_name': name},
+                                  label: '${translate("Reset printer")}: $name'),
+                              name);
+                        },
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: Text(translate('Close'))),
+        ],
       ),
     );
   }
@@ -539,6 +657,7 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
         _actionButton('clear_temp', translate('Clear temp/prefetch')),
         _chkdskButton(),
         _actionButton('unstick_printer', translate('Unstick printer')),
+        _printerPickerButton(),
         _sensitiveActionButton('reset_printers', translate('Reset printers')),
         _actionButton('reset_com_ports', translate('Reset COM ports')),
         _sensitiveActionButton('reinstall_usb_devices', translate('Reinstall USB devices')),
@@ -578,6 +697,15 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
       child: _driverPickerLoading
           ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
           : Text(translate('Install driver')),
+    );
+  }
+
+  Widget _printerPickerButton() {
+    return ElevatedButton(
+      onPressed: _printerPickerLoading ? null : _openPrinterPicker,
+      child: _printerPickerLoading
+          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+          : Text(translate('Reset printer (individual)')),
     );
   }
 
