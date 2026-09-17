@@ -369,9 +369,20 @@ fn reinstall_usb_devices() -> (String, Value) {
 /// identifica nada) usa `port` e/ou `cmdline_contains`, já que múltiplas
 /// JVMs podem estar rodando na máquina e só uma é o TC Server.
 ///
-/// Escopo estritamente "tá rodando? religa se não" — sem tocar em config
-/// de conexão com banco/tabela de preço (isso é território do Datamax,
-/// fora do nosso escopo).
+/// **Reinício incondicional, sempre** — nunca decide "já está rodando,
+/// não faz nada" com base no Status que o Windows reporta. Cenário real
+/// nas lojas: uma microqueda de energia derruba a conexão de rede do
+/// processo sem matar o processo em si -- ele fica "travado por dentro"
+/// (sem processar nada de verdade) e o Windows continua reportando
+/// Status=Running porque o processo tecnicamente ainda existe. Por isso
+/// `stop_and_start_service_hard` abaixo não confia num `Stop-Service`
+/// educado (que pode simplesmente falhar/não fazer nada contra um
+/// processo travado desse jeito) -- mata o processo por PID se ele
+/// ainda estiver de pé depois da tentativa graciosa, garantindo que o
+/// ciclo parar→esperar→iniciar sempre complete de verdade.
+///
+/// Escopo continua sem tocar em config de conexão com banco/tabela de
+/// preço (isso é território do Datamax, fora do nosso escopo).
 #[cfg(windows)]
 fn restart_services_matching(cmd: &PendingCommand) -> (String, Value) {
     let name_patterns: Vec<String> = cmd
@@ -484,10 +495,41 @@ fn restart_services_matching(cmd: &PendingCommand) -> (String, Value) {
 
     let mut per_service = Vec::new();
     for name in &matched {
-        let (_, restart_out) = run_powershell(&format!("Restart-Service -Name '{name}' -Force"));
+        let (_, restart_out) = run_powershell(&stop_and_start_service_hard_script(name));
         per_service.push(json!({"service": name, "result": restart_out}));
     }
     ("done".to_owned(), json!({"matched": matched, "results": per_service}))
+}
+
+/// Ciclo parar→esperar→iniciar que NUNCA desiste de parar de verdade.
+/// `Stop-Service` sozinho pede educadamente pro serviço parar (via SCM) e
+/// pode simplesmente falhar/não fazer nada contra um processo "travado
+/// por dentro" (conexão de rede morta depois de uma microqueda, mas o
+/// processo em si ainda de pé -- Windows continua reportando
+/// Status=Running porque tecnicamente ainda é verdade). Por isso: guarda
+/// o PID antes, tenta o Stop-Service educado, e se o processo daquele PID
+/// ainda estiver vivo depois, mata ele por PID (`Stop-Process -Force`) --
+/// aí sim inicia de novo. Roda incondicionalmente pra todo serviço
+/// encontrado, nunca decide "já está rodando, não faz nada".
+#[cfg(windows)]
+fn stop_and_start_service_hard_script(name: &str) -> String {
+    format!(
+        "$name = '{name}'; \
+         $before = (Get-CimInstance Win32_Service -Filter \"Name='$name'\" -ErrorAction SilentlyContinue).ProcessId; \
+         $stopError = $null; \
+         try {{ Stop-Service -Name $name -Force -ErrorAction Stop }} catch {{ $stopError = $_.ToString() }}; \
+         Start-Sleep -Seconds 2; \
+         $killed = $false; \
+         if ($before -and $before -ne 0) {{ \
+             $still = Get-Process -Id $before -ErrorAction SilentlyContinue; \
+             if ($still) {{ Stop-Process -Id $before -Force -ErrorAction SilentlyContinue; $killed = $true; Start-Sleep -Seconds 1 }} \
+         }}; \
+         $startError = $null; \
+         try {{ Start-Service -Name $name -ErrorAction Stop }} catch {{ $startError = $_.ToString() }}; \
+         $final = Get-Service -Name $name -ErrorAction SilentlyContinue; \
+         $finalStatus = if ($final) {{ $final.Status.ToString() }} else {{ 'not_found' }}; \
+         @{{pid_before=$before; stop_error=$stopError; force_killed=$killed; start_error=$startError; final_status=$finalStatus}} | ConvertTo-Json -Compress"
+    )
 }
 
 #[cfg(windows)]

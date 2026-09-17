@@ -3710,9 +3710,28 @@ fn get_create_service(exe: &str) -> String {
 if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{app_name} Tray.lnk\" del /f /q \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{app_name} Tray.lnk\"
 ", app_name = crate::get_app_name())
     } else {
+        // `sc failure` -- sem isso, se o processo do serviço morrer por
+        // qualquer motivo (crash, alguém encerrar pelo Gerenciador de
+        // Tarefas), o Windows NÃO reinicia ele sozinho; fica morto até o
+        // próximo boot completo da máquina. Causa real confirmada: 3
+        // máquinas de loja (caixa06/caixa02/diretoria) pararam de bater
+        // heartbeat de vez no meio de um dia normal e nunca mais voltaram
+        // -- sem reboot, sem recuperação, o app simplesmente ficou morto
+        // por dias sem ninguém notar. `reset=86400` zera o contador de
+        // falhas depois de 24h estável; as duas primeiras quedas
+        // reiniciam rápido (60s), da terceira em diante espaça pra 5min
+        // (evita martelar a máquina se o problema for algo que sempre vai
+        // fazer o processo cair de novo assim que voltar).
+        //
+        // Só cobre o processo TERMINANDO de verdade (crash/kill) -- não
+        // ajuda se o próprio serviço travar "vivo por fora, travado por
+        // dentro" (mesmo cenário que motivou o restart forçado por PID
+        // nas Ações Rápidas de serviço de terceiro); isso exigiria um
+        // watchdog próprio, fora de escopo aqui.
         format!("
 sc create {app_name} binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{app_name} Service\"
 sc start {app_name}
+sc failure {app_name} reset= 86400 actions= restart/60000/restart/60000/restart/300000
 ",
     app_name = crate::get_app_name())
     }
