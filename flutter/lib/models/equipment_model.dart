@@ -10,13 +10,16 @@ import 'platform_model.dart';
 class EquipmentEntity {
   final int id;
   final String name;
+  // null só pra Entidade raiz (id 0) -- toda outra entidade tem pai.
+  final int? parentId;
 
-  EquipmentEntity({required this.id, required this.name});
+  EquipmentEntity({required this.id, required this.name, this.parentId});
 
   factory EquipmentEntity.fromJson(Map<String, dynamic> json) {
     return EquipmentEntity(
       id: _asInt(json['id']) ?? 0,
       name: json['name']?.toString() ?? '',
+      parentId: _asInt(json['parent_id']),
     );
   }
 }

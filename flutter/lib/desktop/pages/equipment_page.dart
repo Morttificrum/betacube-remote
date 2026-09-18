@@ -6,10 +6,22 @@ import '../../models/equipment_model.dart';
 import '../../models/model.dart';
 import 'equipment_detail_dialog.dart';
 
+/// Sentinela pro "balde" de máquinas sem loja reconhecida (entidade não
+/// atribuída, ou atribuída fora da árvore Clientes/BCTI) -- nenhuma
+/// entidade real do GLPI usa id negativo.
+const int _kOtherGroupId = -1;
+
 /// Aba "Equipamentos": inventário do GLPI por entidade/cliente, cruzado com
 /// o status de acesso remoto (quais máquinas já têm o Beta Cube Remote
 /// rodando). Fase 1 do roadmap "app único" — ver
 /// C:\Users\mortt\.claude\plans\transient-waddling-sparkle.md.
+///
+/// Navegação em 2 camadas (pedido de teste real, 2026-09-19): lista
+/// única com todas as lojas misturadas não escala pra 28-29 lojas (150+
+/// máquinas). Camada 1 mostra um botão por loja (+ qualquer entidade de
+/// primeiro nível sem sub-lojas, ex. "Beta Cube Soluções em Ti" -- essa
+/// continua funcionando igual, só que chegando por um clique em vez de
+/// aparecer solta na lista); camada 2 é a lista filtrada de uma loja só.
 class EquipmentPage extends StatefulWidget {
   const EquipmentPage({Key? key}) : super(key: key);
 
@@ -20,12 +32,37 @@ class EquipmentPage extends StatefulWidget {
 class _EquipmentPageState extends State<EquipmentPage> {
   EquipmentModel get model => gFFI.equipmentModel;
 
+  // null = mostrando a grade de lojas (camada 1).
+  int? _viewingGroupId;
+
   @override
   void initState() {
     super.initState();
     if (!model.pulledOnce) {
       model.pull();
     }
+  }
+
+  /// "Loja" (ou qualquer entidade de 1º nível sem filhos, ex. BCTI) --
+  /// exclui a raiz e qualquer entidade "passthrough" (tem filhos e é
+  /// filha direta da raiz, ex. "Clientes"): essa nunca aparece como
+  /// botão, seus FILHOS que aparecem.
+  List<EquipmentEntity> _groups(List<EquipmentEntity> entities) {
+    if (entities.isEmpty) return [];
+    final root = entities.firstWhereOrNull((e) => e.parentId == null);
+    final hasChildren = <int>{
+      for (final e in entities)
+        if (e.parentId != null) e.parentId!,
+    };
+    final groups = entities.where((e) {
+      if (root != null && e.id == root.id) return false;
+      if (root != null && e.parentId == root.id && hasChildren.contains(e.id)) {
+        return false;
+      }
+      return true;
+    }).toList();
+    groups.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return groups;
   }
 
   @override
@@ -37,8 +74,6 @@ class _EquipmentPageState extends State<EquipmentPage> {
         children: [
           _buildHeader(context),
           const SizedBox(height: 8),
-          _buildEntityFilter(context),
-          const SizedBox(height: 8),
           Obx(() => model.error.value.isEmpty
               ? const SizedBox.shrink()
               : Padding(
@@ -48,7 +83,15 @@ class _EquipmentPageState extends State<EquipmentPage> {
                     style: TextStyle(color: Theme.of(context).colorScheme.error),
                   ),
                 )),
-          Expanded(child: _buildList(context)),
+          Expanded(
+            child: Obx(() {
+              final groupId = _viewingGroupId;
+              if (groupId == null) {
+                return _buildGroupGrid(context);
+              }
+              return _buildGroupList(context, groupId);
+            }),
+          ),
         ],
       ),
     );
@@ -57,8 +100,14 @@ class _EquipmentPageState extends State<EquipmentPage> {
   Widget _buildHeader(BuildContext context) {
     return Row(
       children: [
+        if (_viewingGroupId != null)
+          IconButton(
+            tooltip: translate('Back'),
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => setState(() => _viewingGroupId = null),
+          ),
         Text(
-          translate('Equipment'),
+          _headerTitle(),
           style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
         ),
         const SizedBox(width: 12),
@@ -79,40 +128,114 @@ class _EquipmentPageState extends State<EquipmentPage> {
     );
   }
 
-  Widget _buildEntityFilter(BuildContext context) {
-    return Obx(() {
-      final entities = model.entities;
-      if (entities.isEmpty) return const SizedBox.shrink();
-      return Wrap(
-        spacing: 8,
-        children: [
-          ChoiceChip(
-            label: Text(translate('All')),
-            selected: model.selectedEntityId.value == null,
-            onSelected: (_) => model.selectEntity(null),
-          ),
-          ...entities.map((e) => ChoiceChip(
-                label: Text(e.name),
-                selected: model.selectedEntityId.value == e.id,
-                onSelected: (_) => model.selectEntity(e.id),
-              )),
-        ],
-      );
-    });
+  String _headerTitle() {
+    final groupId = _viewingGroupId;
+    if (groupId == null) return translate('Equipment');
+    if (groupId == _kOtherGroupId) return translate('Other');
+    final name = model.entities.firstWhereOrNull((e) => e.id == groupId)?.name;
+    return name ?? translate('Equipment');
   }
 
-  Widget _buildList(BuildContext context) {
-    return Obx(() {
-      final items = model.items;
-      if (!model.loading.value && items.isEmpty) {
+  Widget _buildGroupGrid(BuildContext context) {
+    final groups = _groups(model.entities);
+    final groupIds = groups.map((g) => g.id).toSet();
+    final counts = <int, int>{};
+    var otherCount = 0;
+    for (final item in model.items) {
+      final eid = item.entityId;
+      if (eid != null && groupIds.contains(eid)) {
+        counts[eid] = (counts[eid] ?? 0) + 1;
+      } else {
+        otherCount++;
+      }
+    }
+    // Nenhuma loja cadastrada ainda E nenhuma máquina sem loja -- não
+    // some com a tela (senão máquina nenhuma some junto), só quando tem
+    // mesmo nada pra mostrar.
+    if (groups.isEmpty && otherCount == 0) {
+      if (!model.loading.value) {
         return Center(child: Text(translate('Empty')));
       }
-      return ListView.separated(
-        itemCount: items.length,
-        separatorBuilder: (_, __) => const Divider(height: 1),
-        itemBuilder: (context, index) => _EquipmentRow(item: items[index]),
-      );
-    });
+      return const SizedBox.shrink();
+    }
+    return SingleChildScrollView(
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        children: [
+          for (final g in groups)
+            _groupCard(
+              icon: Icons.store,
+              label: g.name,
+              count: counts[g.id] ?? 0,
+              onTap: () => setState(() => _viewingGroupId = g.id),
+            ),
+          if (otherCount > 0)
+            _groupCard(
+              icon: Icons.device_unknown,
+              label: translate('Other'),
+              count: otherCount,
+              onTap: () => setState(() => _viewingGroupId = _kOtherGroupId),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _groupCard({
+    required IconData icon,
+    required String label,
+    required int count,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Theme.of(context).cardColor,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: Container(
+          width: 160,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Theme.of(context).dividerColor),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, size: 28),
+              const SizedBox(height: 8),
+              Text(label, style: const TextStyle(fontWeight: FontWeight.bold), maxLines: 2),
+              const SizedBox(height: 4),
+              Text(
+                count == 1 ? '1 máquina' : '$count máquinas',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGroupList(BuildContext context, int groupId) {
+    final groups = _groups(model.entities);
+    final groupIds = groups.map((g) => g.id).toSet();
+    final items = model.items.where((item) {
+      if (groupId == _kOtherGroupId) {
+        return item.entityId == null || !groupIds.contains(item.entityId);
+      }
+      return item.entityId == groupId;
+    }).toList();
+    if (!model.loading.value && items.isEmpty) {
+      return Center(child: Text(translate('Empty')));
+    }
+    return ListView.separated(
+      itemCount: items.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (context, index) => _EquipmentRow(item: items[index]),
+    );
   }
 }
 
@@ -124,13 +247,6 @@ class _EquipmentRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasAgent = item.hasAgent;
-    // Pedido de teste real: a lista não mostrava de qual loja/entidade
-    // cada máquina é -- só dava pra saber filtrando um chip por vez.
-    final entityName = item.entityId == null
-        ? null
-        : gFFI.equipmentModel.entities
-            .firstWhereOrNull((e) => e.id == item.entityId)
-            ?.name;
     // Não usa ListTile(onTap: ..., trailing: ElevatedButton(...)) -- os dois
     // entram na mesma arena de gestos do Flutter e o toque na linha acaba
     // sempre resolvendo pro botão do trailing, mesmo clicando fora dele.
@@ -156,14 +272,6 @@ class _EquipmentRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(item.hostname),
-                    if (entityName != null)
-                      Text(
-                        entityName,
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodySmall
-                            ?.copyWith(fontStyle: FontStyle.italic),
-                      ),
                     Text(
                       hasAgent
                           ? (item.online ? translate('Online') : translate('Offline'))
