@@ -124,6 +124,13 @@ class _EquipmentRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasAgent = item.hasAgent;
+    // Pedido de teste real: a lista não mostrava de qual loja/entidade
+    // cada máquina é -- só dava pra saber filtrando um chip por vez.
+    final entityName = item.entityId == null
+        ? null
+        : gFFI.equipmentModel.entities
+            .firstWhereOrNull((e) => e.id == item.entityId)
+            ?.name;
     // Não usa ListTile(onTap: ..., trailing: ElevatedButton(...)) -- os dois
     // entram na mesma arena de gestos do Flutter e o toque na linha acaba
     // sempre resolvendo pro botão do trailing, mesmo clicando fora dele.
@@ -149,6 +156,14 @@ class _EquipmentRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(item.hostname),
+                    if (entityName != null)
+                      Text(
+                        entityName,
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(fontStyle: FontStyle.italic),
+                      ),
                     Text(
                       hasAgent
                           ? (item.online ? translate('Online') : translate('Offline'))

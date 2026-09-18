@@ -246,6 +246,13 @@ class DesktopTab extends StatefulWidget {
   final TabMenuBuilder? tabMenuBuilder;
   final Widget? tail;
   final Future<bool> Function()? onWindowCloseButton;
+  // Pedido de teste real: o X da janela de sessão remota derrubava a
+  // conexão de verdade -- o esperado era só minimizar pra bandeja, já
+  // que o app roda em segundo plano de qualquer forma. Quando true,
+  // onWindowClose() só escode a janela (o multi_window_manager já sabe
+  // reaproveitar uma janela "inativa" ao reconectar no mesmo id), sem
+  // limpar os tabs/desconectar.
+  final bool keepConnectionsOnClose;
   final TabBuilder? tabBuilder;
   final LabelGetter? labelGetter;
   final double? maxLabelWidth;
@@ -271,6 +278,7 @@ class DesktopTab extends StatefulWidget {
     this.tabMenuBuilder,
     this.tail,
     this.onWindowCloseButton,
+    this.keepConnectionsOnClose = false,
     this.tabBuilder,
     this.labelGetter,
     this.maxLabelWidth,
@@ -307,6 +315,7 @@ class _DesktopTabState extends State<DesktopTab>
   Widget? get tail => widget.tail;
   Future<bool> Function()? get onWindowCloseButton =>
       widget.onWindowCloseButton;
+  bool get keepConnectionsOnClose => widget.keepConnectionsOnClose;
   TabBuilder? get tabBuilder => widget.tabBuilder;
   LabelGetter? get labelGetter => widget.labelGetter;
   double? get maxLabelWidth => widget.maxLabelWidth;
@@ -442,7 +451,9 @@ class _DesktopTabState extends State<DesktopTab>
           final res = await onWindowCloseButton?.call() ?? true;
           if (!res) return;
         }
-        controller.clear();
+        if (!keepConnectionsOnClose) {
+          controller.clear();
+        }
       }
       await windowController.hide();
       await rustDeskWinManager

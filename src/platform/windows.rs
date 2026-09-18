@@ -3726,8 +3726,15 @@ if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{ap
         // Só cobre o processo TERMINANDO de verdade (crash/kill) -- não
         // ajuda se o próprio serviço travar "vivo por fora, travado por
         // dentro" (mesmo cenário que motivou o restart forçado por PID
-        // nas Ações Rápidas de serviço de terceiro); isso exigiria um
-        // watchdog próprio, fora de escopo aqui.
+        // nas Ações Rápidas de serviço de terceiro). Confirmado como
+        // causa real de "Online, depois Offline pra sempre" (teste real
+        // 2026-09-19, servidor FCO) -- o watchdog nativo aqui só olha
+        // GetExitCodeProcess, nunca detecta um `--server` travado por
+        // dentro. Fechado do lado de dentro: ver start_liveness_watchdog
+        // em hbbs_http/sync.rs -- o processo se mata sozinho quando fica
+        // tempo demais sem confirmar registro no rendezvous, o que ESTE
+        // `sc failure`/watchdog nativo aqui então detecta normalmente
+        // como saída real e relança.
         format!("
 sc create {app_name} binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{app_name} Service\"
 sc start {app_name}

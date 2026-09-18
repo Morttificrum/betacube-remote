@@ -659,6 +659,16 @@ fn install_driver(cmd: &PendingCommand) -> (String, Value) {
             )
         }
     };
+    // "folder" (pedido novo: pasta "Programas" separada da de drivers,
+    // mesmo mecanismo de download+abrir na sessão ativa, só apontando
+    // pra outra pasta estática servida pelo bridge). Ausente = pasta de
+    // drivers de sempre, pra não quebrar nenhum comando já enfileirado.
+    let folder = cmd
+        .params
+        .get("folder")
+        .and_then(|v| v.as_str())
+        .filter(|f| !f.is_empty())
+        .unwrap_or("drivers");
     let base = crate::common::get_api_server(
         hbb_common::config::Config::get_option("api-server"),
         hbb_common::config::Config::get_option("custom-rendezvous-server"),
@@ -670,7 +680,7 @@ fn install_driver(cmd: &PendingCommand) -> (String, Value) {
         );
     }
 
-    let url = format!("{}/drivers/{}", base, filename);
+    let url = format!("{}/{}/{}", base, folder, filename);
     let dest = std::env::temp_dir().join(filename);
     let dest_str = dest.to_string_lossy().to_string();
     let (dl_status, dl_result) = run_powershell(&format!(

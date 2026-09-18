@@ -8,7 +8,9 @@ import 'package:betacube_remote/common/shared_state.dart';
 import 'package:betacube_remote/common/widgets/dialog.dart';
 import 'package:betacube_remote/common/widgets/login.dart';
 import 'package:betacube_remote/consts.dart';
+import 'package:betacube_remote/desktop/pages/equipment_detail_dialog.dart';
 import 'package:betacube_remote/desktop/widgets/remote_toolbar.dart';
+import 'package:betacube_remote/models/equipment_model.dart';
 import 'package:betacube_remote/models/model.dart';
 import 'package:betacube_remote/models/platform_model.dart';
 import 'package:betacube_remote/utils/multi_window_manager.dart';
@@ -535,6 +537,27 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
           child: Text(translate('Restart remote device')),
           onPressed: () =>
               showRestartRemoteDevice(pi, id, sessionId, ffi.dialogManager)),
+    );
+  }
+  // Ações Rápidas -- pedido de teste real: hoje pra usar qualquer Ação
+  // Rápida era preciso saber da sessão remota e voltar pra aba Equipment
+  // da janela principal. Reaproveita o mesmo diálogo de lá, montando um
+  // EquipmentItem sintético a partir do que a sessão já sabe (id do
+  // rustdesk + hostname), sem precisar de outra chamada ao bridge.
+  // Só Windows: hoje as Ações Rápidas só são implementadas nesse SO.
+  if (isDefaultConn && pi.platform == kPeerPlatformWindows) {
+    v.add(
+      TTextMenu(
+          child: Text(translate('Quick Actions')),
+          onPressed: () => showEquipmentDetailDialog(
+                context,
+                EquipmentItem(
+                  glpiId: 0,
+                  hostname: pi.hostname.isNotEmpty ? pi.hostname : id,
+                  rustdeskId: id,
+                  online: true,
+                ),
+              )),
     );
   }
   // insertLock

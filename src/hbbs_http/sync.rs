@@ -29,6 +29,62 @@ pub fn start() {
     let _sender = SENDER.lock().unwrap();
     #[cfg(windows)]
     crate::quick_actions::start_sensor_loop();
+    #[cfg(windows)]
+    start_liveness_watchdog();
+}
+
+/// Investigação de teste real (2026-09-19): máquinas ficam "Online" por
+/// um tempo e depois "Offline" PRA SEMPRE, sem intermitência -- só
+/// recupera com reinício manual (via AnyDesk). Rastreado até um buraco
+/// real no watchdog nativo do serviço (`run_service` em
+/// platform/windows.rs): ele só relança o processo `--server` quando o
+/// processo REALMENTE sai (GetExitCodeProcess != STILL_ACTIVE). Um
+/// processo que trava sem sair -- captura de tela presa após o monitor
+/// dormir/acordar, sessão RDP cair, ou (caso do servidor "FCO" relatado
+/// hoje) uma máquina sem monitor físico -- nunca é detectado, porque
+/// ele continua "rodando" pro Windows, só que congelado por dentro.
+///
+/// Este processo não pode consertar o watchdog nativo (é código C++
+/// fora deste crate), então se auto-mata quando fica tempo demais sem
+/// confirmar registro no servidor de rendezvous -- isso SIM já é
+/// detectado como saída real pelo watchdog nativo, que relança um
+/// processo novo automaticamente. `STALE_AFTER` é bem maior que
+/// qualquer blip de rede real já observado (minutos, não segundos) e
+/// bem maior que o ciclo normal de registro (`REG_INTERVAL` = 15s), pra
+/// nunca disparar por instabilidade passageira -- só por travamento de
+/// verdade.
+#[cfg(windows)]
+fn start_liveness_watchdog() {
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    const CHECK_EVERY: Duration = Duration::from_secs(30);
+    const STALE_AFTER: Duration = Duration::from_secs(300);
+    std::thread::spawn(move || {
+        let boot = Instant::now();
+        loop {
+            std::thread::sleep(CHECK_EVERY);
+            let last_ok_ms = crate::rendezvous_mediator::last_register_ok_ms();
+            let stale_secs = if last_ok_ms == 0 {
+                // Ainda não registrou nem uma vez nesta execução -- usa o
+                // tempo desde que este processo começou, não trata como
+                // "stale" antes de dar tempo suficiente pra primeira
+                // tentativa (evita reiniciar em loop logo no boot).
+                boot.elapsed().as_secs()
+            } else {
+                let now_ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                (now_ms.saturating_sub(last_ok_ms).max(0) / 1000) as u64
+            };
+            if stale_secs > STALE_AFTER.as_secs() {
+                log::error!(
+                    "Sem confirmação de registro no rendezvous há {}s -- processo parece travado, reiniciando (watchdog de confiabilidade)",
+                    stale_secs
+                );
+                std::process::exit(1);
+            }
+        }
+    });
 }
 
 #[cfg(not(target_os = "ios"))]

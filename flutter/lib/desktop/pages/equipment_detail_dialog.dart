@@ -128,6 +128,7 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
   }
 
   bool _driverPickerLoading = false;
+  bool _programPickerLoading = false;
   bool _printerPickerLoading = false;
 
   /// "Instalar driver" (Fase 4): busca o que tem no pacote hospedado pelo
@@ -172,6 +173,60 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
                         'install_driver',
                         params: {'filename': selected},
                         label: '${translate("Install driver")}: $selected',
+                      );
+                    },
+              child: Text(translate('Apply')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// "Programas" -- pasta separada da de drivers (pedido de teste real):
+  /// instaladores de terceiro pra problema específico (driver do pinpad
+  /// Gertec, Revo Uninstaller, Office etc.), sem scan automático, o
+  /// técnico escolhe e clica. Mesmo mecanismo/endpoint de
+  /// [_openDriverPicker], só que aponta pra /internal/programs e passa
+  /// `folder: 'programs'` pro install_driver saber de onde baixar.
+  Future<void> _openProgramPicker() async {
+    setState(() => _programPickerLoading = true);
+    final programs = await gFFI.equipmentModel.listPrograms();
+    if (!mounted) return;
+    setState(() => _programPickerLoading = false);
+
+    if (programs.isEmpty) {
+      setState(() => _lastActionMessage = translate('Nenhum programa disponível no pacote'));
+      return;
+    }
+
+    String? selected = programs.first['filename']?.toString();
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(translate('Run program')),
+          content: DropdownButton<String>(
+            isExpanded: true,
+            value: selected,
+            items: programs
+                .map((d) => d['filename']?.toString())
+                .whereType<String>()
+                .map((name) => DropdownMenuItem(value: name, child: Text(name)))
+                .toList(),
+            onChanged: (v) => setDialogState(() => selected = v),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: Text(translate('Cancel'))),
+            TextButton(
+              onPressed: selected == null
+                  ? null
+                  : () {
+                      Navigator.of(ctx).pop();
+                      _runAction(
+                        'install_driver',
+                        params: {'filename': selected, 'folder': 'programs'},
+                        label: '${translate("Run program")}: $selected',
                       );
                     },
               child: Text(translate('Apply')),
@@ -662,6 +717,7 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
         _actionButton('reset_com_ports', translate('Reset COM ports')),
         _sensitiveActionButton('reinstall_usb_devices', translate('Reinstall USB devices')),
         _driverPickerButton(),
+        _programPickerButton(),
         _actionButton('restart_services', 'Tomcat', params: {'name_contains': ['tomcat']}),
         // Nome interno do serviço Windows nunca foi confirmado -- só o
         // Display Name (o que aparece em services.msc). Cobre os dois
@@ -697,6 +753,15 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
       child: _driverPickerLoading
           ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
           : Text(translate('Install driver')),
+    );
+  }
+
+  Widget _programPickerButton() {
+    return ElevatedButton(
+      onPressed: _programPickerLoading ? null : _openProgramPicker,
+      child: _programPickerLoading
+          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+          : Text(translate('Run program')),
     );
   }
 

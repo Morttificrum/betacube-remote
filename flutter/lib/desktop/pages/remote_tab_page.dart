@@ -135,6 +135,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
       body: DesktopTab(
         controller: tabController,
         onWindowCloseButton: handleWindowCloseButton,
+        keepConnectionsOnClose: true,
         tail: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -390,31 +391,14 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
   }
 
   Future<bool> handleWindowCloseButton() async {
-    final connLength = tabController.length;
-    if (connLength == 1) {
-      if (await desktopTryShowTabAuditDialogCloseCancelled(
-        id: tabController.state.value.tabs[0].key,
-        tabController: tabController,
-      )) {
-        return false;
-      }
-    }
-    if (connLength <= 1) {
-      tabController.clear();
-      return true;
-    } else {
-      final bool res;
-      if (!option2bool(kOptionEnableConfirmClosingTabs,
-          bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs))) {
-        res = true;
-      } else {
-        res = await closeConfirmDialog();
-      }
-      if (res) {
-        tabController.clear();
-      }
-      return res;
-    }
+    // Pedido de teste real (2026-09-18): o X da janela de sessão remota
+    // estava derrubando a conexão de verdade -- o esperado é só
+    // minimizar pra bandeja, já que o app roda em segundo plano de
+    // qualquer forma. `keepConnectionsOnClose: true` (DesktopTab, acima)
+    // já garante que a sessão não é limpa nesse fluxo -- aqui só libera
+    // o hide(), sem diálogo de confirmação/nota de auditoria (não faz
+    // sentido pedir isso pra uma janela que não está de fato fechando).
+    return true;
   }
 
   _update_remote_count() =>

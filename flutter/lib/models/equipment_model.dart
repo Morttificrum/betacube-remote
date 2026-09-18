@@ -95,12 +95,16 @@ class EquipmentModel {
         return;
       }
 
-      if (entities.isEmpty) {
-        final entitiesResp = await http.get(Uri.parse('$api/internal/entities'));
-        if (entitiesResp.statusCode == 200) {
-          final List list = jsonDecode(entitiesResp.body);
-          entities.value = list.map((e) => EquipmentEntity.fromJson(e)).toList();
-        }
+      // Busca de novo em TODO pull(), não só na primeira vez -- bug real
+      // confirmado em teste de loja: uma sub-entidade nova (ex. instalar
+      // com uma tag de loja nova) nunca aparecia no filtro até reiniciar
+      // o app inteiro, porque essa chamada só rodava uma vez por sessão.
+      // Lista de entidades é pequena, o custo de rebuscar sempre é
+      // desprezível.
+      final entitiesResp = await http.get(Uri.parse('$api/internal/entities'));
+      if (entitiesResp.statusCode == 200) {
+        final List list = jsonDecode(entitiesResp.body);
+        entities.value = list.map((e) => EquipmentEntity.fromJson(e)).toList();
       }
 
       final entityId = selectedEntityId.value;
@@ -147,6 +151,23 @@ class EquipmentModel {
     if (api.isEmpty) return [];
     try {
       final resp = await http.get(Uri.parse('$api/internal/drivers'));
+      if (resp.statusCode != 200) return [];
+      final List list = jsonDecode(resp.body);
+      return list.cast<Map<String, dynamic>>();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Mesma ideia de [listDrivers], pasta separada "Programas" -- pedido
+  /// de teste real: instaladores de terceiro escolhidos manualmente
+  /// (driver do pinpad, Revo Uninstaller, Office etc.), sem scan
+  /// automático, diferente do que o SDI já resolve pra componente do PC.
+  Future<List<Map<String, dynamic>>> listPrograms() async {
+    final api = await bind.mainGetApiServer();
+    if (api.isEmpty) return [];
+    try {
+      final resp = await http.get(Uri.parse('$api/internal/programs'));
       if (resp.statusCode != 200) return [];
       final List list = jsonDecode(resp.body);
       return list.cast<Map<String, dynamic>>();
