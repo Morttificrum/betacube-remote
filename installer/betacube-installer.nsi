@@ -112,10 +112,22 @@ Section "Instalar ${APP_NAME}" SecMain
   ExecWait '"${TEMP_SRC}\${APP_EXE}" --install'
   RMDir /r "${TEMP_SRC}"
 
-  CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
-
+  ; NÃO cria atalho de área de trabalho/menu iniciar principal aqui --
+  ; bug real de teste (2026-09-21): o --install acima (RustDesk nativo,
+  ; ver comentário logo acima e install_me() em platform/windows.rs) JÁ
+  ; cria os dois sozinho -- atalho de área de trabalho em
+  ; "%PUBLIC%\Desktop\{app_name}.lnk" (todos os usuários) e pasta de
+  ; menu iniciar em "%ProgramData%\...\Start Menu\Programs\{app_name}\"
+  ; -- e o Windows sobrepõe %PUBLIC%\Desktop com a área de trabalho do
+  ; usuário atual na mesma tela. Criar de novo aqui (sem
+  ; SetShellVarContext all, então em pastas per-user DIFERENTES das do
+  ; nativo) não sobrescrevia nada -- resultava em DOIS ícones "Beta Cube
+  ; Remote" idênticos. Continua criando só o atalho de "Desinstalar"
+  ; (aponta pro NOSSO uninstall.exe, que roda --uninstall nativo E
+  ; depois limpa o resto -- ver Section "Uninstall" abaixo -- diferente
+  ; do "Uninstall {app_name}.lnk" que o nativo cria sozinho, que só faz
+  ; a parte dele).
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
-  CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\Desinstalar ${APP_NAME}.lnk" "$INSTDIR\uninstall.exe"
 
   WriteRegStr HKLM "${UNINSTALL_REG}" "DisplayName" "${APP_NAME}"
@@ -145,8 +157,10 @@ Section "Uninstall"
   ; falha silenciosamente se a pasta não estiver vazia, deixando lixo pra trás.
   RMDir /r "$INSTDIR"
 
-  Delete "$DESKTOP\${APP_NAME}.lnk"
-  Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
+  ; Atalho de área de trabalho e o "{app}.lnk" do menu iniciar nunca
+  ; foram criados por AQUI (ver comentário na Section principal, acima)
+  ; -- são do --install nativo, e o --uninstall nativo (ExecWait acima)
+  ; já os removeu. Só o "Desinstalar" é nosso de verdade.
   Delete "$SMPROGRAMS\${APP_NAME}\Desinstalar ${APP_NAME}.lnk"
   RMDir "$SMPROGRAMS\${APP_NAME}"
 
