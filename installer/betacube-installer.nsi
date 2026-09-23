@@ -102,6 +102,31 @@ Section "Instalar ${APP_NAME}" SecMain
 !endif
   FileClose $0
 
+  ; Limpa qualquer resíduo "RustDesk" (nome genérico, NUNCA o nosso) de
+  ; testes/instalações anteriores a este fix (2026-09-23) -- nosso
+  ; desinstalador só sabia procurar por "${APP_NAME}", nunca pelo nome
+  ; genérico puro, então um atalho/chave órfão desses ficava pra
+  ; sempre, mesmo depois de reinstalar com a versão corrigida. Cobre os
+  ; dois locais que o --install nativo usa (%PUBLIC%\Desktop e
+  ; %ProgramData%\...\Start Menu, ver install_me() em
+  ; platform/windows.rs) e os per-user (caso tenha vindo do NSIS antigo,
+  ; antes do fix do atalho duplicado). Silencioso se não existir --
+  ; Delete/RMDir não falham em cima de arquivo/pasta inexistente.
+  Delete "$%PUBLIC%\Desktop\RustDesk.lnk"
+  Delete "$%PROGRAMDATA%\Microsoft\Windows\Start Menu\Programs\RustDesk\RustDesk.lnk"
+  Delete "$%PROGRAMDATA%\Microsoft\Windows\Start Menu\Programs\RustDesk\Uninstall RustDesk.lnk"
+  RMDir "$%PROGRAMDATA%\Microsoft\Windows\Start Menu\Programs\RustDesk"
+  Delete "$DESKTOP\RustDesk.lnk"
+  Delete "$SMPROGRAMS\RustDesk\RustDesk.lnk"
+  Delete "$SMPROGRAMS\RustDesk\Desinstalar RustDesk.lnk"
+  RMDir "$SMPROGRAMS\RustDesk"
+  ; Mesma limpeza pra chave de registro genérica que causava o bug do
+  ; caminho errado ("C:\Program Files\RustDesk") -- ver get_valid_subkey()
+  ; em platform/windows.rs, corrigido no mesmo commit. Some com qualquer
+  ; InstallLocation órfão gravado ali por causa antiga/desconhecida.
+  DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\{54E86BC2-6C85-41F3-A9EB-1A94AC9B1F93}_is1"
+  DeleteRegKey HKLM "Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{54E86BC2-6C85-41F3-A9EB-1A94AC9B1F93}_is1"
+
   ; O --install é o auto-instalador completo do próprio RustDesk (serviço,
   ; driver de impressora, atalhos e registro de desinstalação PRÓPRIOS,
   ; independentes do NSIS -- ver src/platform/windows.rs::install_me). Roda
@@ -141,6 +166,17 @@ Section "Instalar ${APP_NAME}" SecMain
 
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
+  ; Regra de firewall pro próprio app -- pedido de teste real
+  ; (2026-09-23): loja com política de firewall restritiva pode bloquear
+  ; o tráfego de saída mesmo sendo o padrão do Windows liberar por conta
+  ; própria (GPO/antivírus corporativo pode mudar isso). Regra por
+  ; PROGRAMA (não por porta fixa) cobre heartbeat pro bridge (21114) E o
+  ; protocolo do RustDesk (21115-21119) de uma vez, sem precisar listar
+  ; porta por porta. "dir=in" também, pra sessão remota entrante
+  ; funcionar sem prompt do Windows Defender Firewall na primeira vez.
+  nsExec::Exec 'netsh advfirewall firewall add rule name="${APP_NAME}" dir=in action=allow program="$INSTDIR\${APP_EXE}" enable=yes'
+  nsExec::Exec 'netsh advfirewall firewall add rule name="${APP_NAME}" dir=out action=allow program="$INSTDIR\${APP_EXE}" enable=yes'
+
   MessageBox MB_OK "Beta Cube Remote instalado com sucesso!$\n$\nO acesso remoto Beta Cube esta pronto.$\nAbra o app e passe o ID para a equipe."
 SectionEnd
 
@@ -150,6 +186,8 @@ Section "Uninstall"
   ; DEPOIS o NSIS limpa o que sobrar.
   ExecWait '"$INSTDIR\${APP_EXE}" --uninstall'
   Sleep 2000
+
+  nsExec::Exec 'netsh advfirewall firewall delete rule name="${APP_NAME}"'
 
   ; /r (recursivo) porque o --install do RustDesk cria arquivos/pastas
   ; próprios dentro de $INSTDIR (data/, drivers/, usbmmidd_v2/, o atalho de
