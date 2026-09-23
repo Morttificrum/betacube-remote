@@ -1272,8 +1272,6 @@ pub fn lock_screen() {
     }
 }
 
-const IS1: &str = "{54E86BC2-6C85-41F3-A9EB-1A94AC9B1F93}_is1";
-
 fn get_subkey(name: &str, wow: bool) -> String {
     let tmp = format!(
         "HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{}",
@@ -1286,15 +1284,22 @@ fn get_subkey(name: &str, wow: bool) -> String {
     }
 }
 
+/// Bug real de teste (2026-09-22, loja Vargem Grande): a tela de
+/// instalação mostrou "C:\Program Files\RustDesk" numa máquina que
+/// nunca teve RustDesk instalado -- rastreado até aqui. A versão
+/// upstream desta função checava primeiro uma chave de registro
+/// GENÉRICA e fixa (`{54E86BC2-6C85-41F3-A9EB-1A94AC9B1F93}_is1`,
+/// convenção de instalador Inno Setup), compartilhada por QUALQUER
+/// coisa da família RustDesk -- não só o RustDesk oficial, qualquer
+/// fork/white-label que não mude esse GUID. Se essa chave tiver um
+/// InstallLocation gravado por OUTRA coisa (imagem de sistema clonada,
+/// outro produto baseado em RustDesk instalado antes) -- nosso
+/// instalador ou nosso --install (nem gravou nada nela, confirmado:
+/// install_me() só grava na chave com nosso nome de marca) acabava
+/// reaproveitando aquele caminho genérico errado. Removido -- só
+/// reconhece instalação anterior pela nossa PRÓPRIA chave de marca,
+/// nunca a genérica.
 fn get_valid_subkey() -> String {
-    let subkey = get_subkey(IS1, false);
-    if !get_reg_of(&subkey, "InstallLocation").is_empty() {
-        return subkey;
-    }
-    let subkey = get_subkey(IS1, true);
-    if !get_reg_of(&subkey, "InstallLocation").is_empty() {
-        return subkey;
-    }
     let app_name = crate::get_app_name();
     let subkey = get_subkey(&app_name, true);
     if !get_reg_of(&subkey, "InstallLocation").is_empty() {
