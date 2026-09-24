@@ -230,6 +230,37 @@ extern "C"
         return IsWindows10OrGreater();
     }
 
+    // Bug real de teste (2026-09-24, caixa01/Itaquera): install_driver
+    // baixava o arquivo certinho mas nunca abria na tela -- CreateProcessAsUserW
+    // falhava com ERROR_PRIVILEGE_NOT_HELD (1314), mesmo o serviço rodando
+    // como LocalSystem. Causa: LocalSystem TEM os privilégios necessários
+    // (SeIncreaseQuotaPrivilege/SeAssignPrimaryTokenPrivilege) no token,
+    // mas eles ficam DESABILITADOS por padrão -- Windows exige habilitar
+    // explicitamente antes de usar, mesmo já estando presentes. Nunca
+    // tinha sido chamado com as_user=TRUE de verdade numa máquina real
+    // antes de hoje (install_driver é a primeira Ação Rápida que precisa
+    // disso), por isso ficou latente até agora.
+    static bool EnablePrivilege(LPCWSTR privilegeName)
+    {
+        HANDLE hToken;
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
+            return false;
+        LUID luid;
+        if (!LookupPrivilegeValueW(NULL, privilegeName, &luid))
+        {
+            CloseHandle(hToken);
+            return false;
+        }
+        TOKEN_PRIVILEGES tp;
+        tp.PrivilegeCount = 1;
+        tp.Privileges[0].Luid = luid;
+        tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+        BOOL adjusted = AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(tp), NULL, NULL);
+        bool ok = adjusted && GetLastError() == ERROR_SUCCESS;
+        CloseHandle(hToken);
+        return ok;
+    }
+
     HANDLE LaunchProcessWin(LPCWSTR cmd, DWORD dwSessionId, BOOL as_user, BOOL show, DWORD *pDwTokenPid)
     {
         HANDLE hProcess = NULL;
@@ -252,6 +283,10 @@ extern "C"
             DWORD dwCreationFlags = DETACHED_PROCESS;
             if (as_user)
             {
+                // CreateProcessAsUserW exige os dois habilitados no processo
+                // CHAMADOR (o serviço), não no token de destino.
+                EnablePrivilege(SE_INCREASE_QUOTA_NAME);
+                EnablePrivilege(SE_ASSIGNPRIMARYTOKEN_NAME);
 
                 CreateEnvironmentBlock(&lpEnvironment, // Environment block
                                        hToken,         // New token

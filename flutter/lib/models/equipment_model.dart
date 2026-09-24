@@ -147,18 +147,23 @@ class EquipmentModel {
   }
 
   /// Lista os instaladores de driver disponíveis no pacote hospedado pelo
-  /// bridge (Fase 4) — devolve [] em caso de erro, nunca null (o botão
-  /// que chama isso já trata lista vazia como "nada disponível").
-  Future<List<Map<String, dynamic>>> listDrivers() async {
+  /// bridge (Fase 4). Bug real de teste (2026-09-24): antes isso devolvia
+  /// [] tanto pra "pacote vazio" quanto pra "não consegui nem falar com o
+  /// bridge" -- o botão via lista vazia e ficava quieto, parecendo que o
+  /// clique não fez nada. Agora devolve o motivo do erro junto (null =
+  /// sucesso, mesmo que a lista venha vazia de verdade).
+  Future<(List<Map<String, dynamic>> items, String? error)> listDrivers() async {
     final api = await bind.mainGetApiServer();
-    if (api.isEmpty) return [];
+    if (api.isEmpty) return (<Map<String, dynamic>>[], translate('Servidor da API não configurado'));
     try {
       final resp = await http.get(Uri.parse('$api/internal/drivers'));
-      if (resp.statusCode != 200) return [];
+      if (resp.statusCode != 200) {
+        return (<Map<String, dynamic>>[], 'HTTP ${resp.statusCode}');
+      }
       final List list = jsonDecode(resp.body);
-      return list.cast<Map<String, dynamic>>();
-    } catch (_) {
-      return [];
+      return (list.cast<Map<String, dynamic>>(), null);
+    } catch (e) {
+      return (<Map<String, dynamic>>[], e.toString());
     }
   }
 
@@ -166,16 +171,18 @@ class EquipmentModel {
   /// de teste real: instaladores de terceiro escolhidos manualmente
   /// (driver do pinpad, Revo Uninstaller, Office etc.), sem scan
   /// automático, diferente do que o SDI já resolve pra componente do PC.
-  Future<List<Map<String, dynamic>>> listPrograms() async {
+  Future<(List<Map<String, dynamic>> items, String? error)> listPrograms() async {
     final api = await bind.mainGetApiServer();
-    if (api.isEmpty) return [];
+    if (api.isEmpty) return (<Map<String, dynamic>>[], translate('Servidor da API não configurado'));
     try {
       final resp = await http.get(Uri.parse('$api/internal/programs'));
-      if (resp.statusCode != 200) return [];
+      if (resp.statusCode != 200) {
+        return (<Map<String, dynamic>>[], 'HTTP ${resp.statusCode}');
+      }
       final List list = jsonDecode(resp.body);
-      return list.cast<Map<String, dynamic>>();
-    } catch (_) {
-      return [];
+      return (list.cast<Map<String, dynamic>>(), null);
+    } catch (e) {
+      return (<Map<String, dynamic>>[], e.toString());
     }
   }
 
@@ -222,22 +229,29 @@ class EquipmentModel {
   }
 
   /// Enfileira uma Ação Rápida pro device — executa no próximo contato
-  /// (heartbeat) da máquina com o bridge, não é instantâneo. Devolve o id
-  /// do comando, ou null se não deu pra enfileirar.
-  Future<int?> enqueueCommand(String rustdeskId, String action, [Map<String, dynamic>? params]) async {
+  /// (heartbeat) da máquina com o bridge, não é instantâneo. Bug real de
+  /// teste (2026-09-24): antes devolvia só null em qualquer falha (API
+  /// não configurada, bridge fora do ar, HTTP não-200, JSON quebrado) --
+  /// o botão via null e ficava quieto, o clique parecia não ter feito
+  /// nada. Agora devolve o motivo junto (null = sucesso).
+  Future<(int? id, String? error)> enqueueCommand(String rustdeskId, String action, [Map<String, dynamic>? params]) async {
     final api = await bind.mainGetApiServer();
-    if (api.isEmpty) return null;
+    if (api.isEmpty) return (null, translate('Servidor da API não configurado'));
     try {
       final resp = await http.post(
         Uri.parse('$api/internal/commands'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'rustdesk_id': rustdeskId, 'action': action, 'params': params ?? {}}),
       );
-      if (resp.statusCode != 200) return null;
+      if (resp.statusCode != 200) {
+        return (null, 'HTTP ${resp.statusCode}: ${resp.body}');
+      }
       final body = jsonDecode(resp.body) as Map<String, dynamic>;
-      return _asInt(body['id']);
-    } catch (_) {
-      return null;
+      final id = _asInt(body['id']);
+      if (id == null) return (null, translate('Resposta do bridge sem id de comando'));
+      return (id, null);
+    } catch (e) {
+      return (null, e.toString());
     }
   }
 }

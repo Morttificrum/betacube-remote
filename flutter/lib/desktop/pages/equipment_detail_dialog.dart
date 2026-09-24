@@ -109,13 +109,28 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
     });
   }
 
+  /// Bug real de teste (2026-09-24, caixa01/Itaquera): clicar em "Install
+  /// driver" não dava retorno nenhum quando o pedido falhava antes de
+  /// chegar aqui (ver [_openDriverPicker]) -- e mesmo quando chegava,
+  /// `_lastActionMessage` é um texto pequeno dentro do painel, fácil de
+  /// não notar. `showToast` (mesmo usado em qualquer lugar do app pra
+  /// feedback que não pode passar batido) garante que TODO clique dá
+  /// sinal visível na hora: "executando" logo de cara, depois sucesso ou
+  /// erro com o motivo real -- nunca fica em silêncio.
   Future<void> _runAction(String action, {Map<String, dynamic>? params, String? label}) async {
-    final id = await gFFI.equipmentModel.enqueueCommand(widget.item.rustdeskId!, action, params);
+    final actionLabel = label ?? action;
+    showToast('$actionLabel: ${translate("executando...")}');
+    final (id, error) = await gFFI.equipmentModel.enqueueCommand(widget.item.rustdeskId!, action, params);
     if (!mounted) return;
+    if (id != null) {
+      showToast('$actionLabel: ${translate("comando enviado")}');
+    } else {
+      showToast('$actionLabel: ${translate("falha ao enviar comando")} -- ${error ?? translate("erro desconhecido")}');
+    }
     setState(() {
       _lastActionMessage = id != null
-          ? '${label ?? action}: ${translate("enviado, deve executar no próximo contato da máquina")}'
-          : '${label ?? action}: ${translate("falha ao enviar comando")}';
+          ? '$actionLabel: ${translate("enviado, deve executar no próximo contato da máquina")}'
+          : '$actionLabel: ${translate("falha ao enviar comando")}${error != null ? " -- $error" : ""}';
     });
     // O comando novo já aparece no histórico como "pending" -- o técnico
     // pode abrir o histórico de novo depois (botão de atualizar) pra ver
@@ -136,12 +151,19 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
   /// a escolha é necessária mesmo (são arquivos nomeados/distintos, não dá
   /// pra "resetar tudo" já que instalar é sempre um arquivo específico).
   Future<void> _openDriverPicker() async {
+    showToast('${translate("Install driver")}: ${translate("buscando pacote...")}');
     setState(() => _driverPickerLoading = true);
-    final drivers = await gFFI.equipmentModel.listDrivers();
+    final (drivers, error) = await gFFI.equipmentModel.listDrivers();
     if (!mounted) return;
     setState(() => _driverPickerLoading = false);
 
+    if (error != null) {
+      showToast('${translate("Install driver")}: ${translate("falha ao buscar pacote")} -- $error');
+      setState(() => _lastActionMessage = '${translate("Install driver")}: $error');
+      return;
+    }
     if (drivers.isEmpty) {
+      showToast(translate('Nenhum driver disponível no pacote'));
       setState(() => _lastActionMessage = translate('Nenhum driver disponível no pacote'));
       return;
     }
@@ -190,12 +212,19 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
   /// [_openDriverPicker], só que aponta pra /internal/programs e passa
   /// `folder: 'programs'` pro install_driver saber de onde baixar.
   Future<void> _openProgramPicker() async {
+    showToast('${translate("Run program")}: ${translate("buscando pacote...")}');
     setState(() => _programPickerLoading = true);
-    final programs = await gFFI.equipmentModel.listPrograms();
+    final (programs, error) = await gFFI.equipmentModel.listPrograms();
     if (!mounted) return;
     setState(() => _programPickerLoading = false);
 
+    if (error != null) {
+      showToast('${translate("Run program")}: ${translate("falha ao buscar pacote")} -- $error');
+      setState(() => _lastActionMessage = '${translate("Run program")}: $error');
+      return;
+    }
     if (programs.isEmpty) {
+      showToast(translate('Nenhum programa disponível no pacote'));
       setState(() => _lastActionMessage = translate('Nenhum programa disponível no pacote'));
       return;
     }
@@ -249,13 +278,15 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
   Future<void> _openPrinterPicker() async {
     final rustdeskId = widget.item.rustdeskId;
     if (rustdeskId == null || rustdeskId.isEmpty) return;
+    showToast('${translate("List printers")}: ${translate("executando...")}');
     setState(() => _printerPickerLoading = true);
-    final commandId = await gFFI.equipmentModel.enqueueCommand(rustdeskId, 'list_printers');
+    final (commandId, error) = await gFFI.equipmentModel.enqueueCommand(rustdeskId, 'list_printers');
     if (commandId == null) {
       if (!mounted) return;
+      showToast('${translate("List printers")}: ${translate("falha ao enviar comando")} -- ${error ?? translate("erro desconhecido")}');
       setState(() {
         _printerPickerLoading = false;
-        _lastActionMessage = '${translate("List printers")}: ${translate("falha ao enviar comando")}';
+        _lastActionMessage = '${translate("List printers")}: ${translate("falha ao enviar comando")}${error != null ? " -- $error" : ""}';
       });
       return;
     }
@@ -283,11 +314,13 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
     setState(() => _printerPickerLoading = false);
 
     if (resultCmd == null) {
+      showToast(translate('Máquina não respondeu a tempo -- confira o histórico de comandos'));
       setState(() => _lastActionMessage =
           translate('Máquina não respondeu a tempo -- confira o histórico de comandos'));
       return;
     }
     if (resultCmd['status'] != 'done') {
+      showToast('${translate("List printers")}: ${translate("falhou")}');
       setState(() => _lastActionMessage = '${translate("List printers")}: ${translate("falhou")}');
       return;
     }
@@ -307,6 +340,7 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
 
     if (!mounted) return;
     if (printers.isEmpty) {
+      showToast(translate('Nenhuma impressora instalada encontrada'));
       setState(() => _lastActionMessage = translate('Nenhuma impressora instalada encontrada'));
       return;
     }
