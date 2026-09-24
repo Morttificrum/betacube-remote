@@ -109,6 +109,15 @@ Future<void> main(List<String> args) async {
     runConnectionManagerScreen();
   } else if (args.contains('--install')) {
     runInstallPage();
+  } else if (bind.mainGetOptionSync(key: 'preset-note').isNotEmpty) {
+    // Proteção do app nas lojas (pedido de teste real, 2026-09-24): nada
+    // com janela pode aparecer pro funcionário -- só o serviço em
+    // segundo plano. `preset-note` só vem preenchido em instalador de
+    // loja (STORE_NAME); instalador genérico (máquina-hub de técnico)
+    // continua abrindo normal. O lado Rust (core_main.rs) já recusa
+    // lançar o ícone de bandeja pelo mesmo sinal -- isso aqui cobre o
+    // caso de alguém clicar num atalho remanescente que chame o exe puro.
+    return;
   } else {
     desktopType = DesktopType.main;
     await windowManager.ensureInitialized();

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../common.dart';
@@ -145,6 +146,7 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
   bool _driverPickerLoading = false;
   bool _programPickerLoading = false;
   bool _printerPickerLoading = false;
+  bool _driverIssuesPickerLoading = false;
 
   /// "Instalar driver" (Fase 4): busca o que tem no pacote hospedado pelo
   /// bridge e deixa o técnico escolher -- ao contrário da impressora, aqui
@@ -259,6 +261,248 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
                       );
                     },
               child: Text(translate('Apply')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// "Detectar dispositivos sem driver" (catálogo VID/PID, pedido de
+  /// teste real 2026-09-24) -- CDC ACM Comm em "Outros dispositivos" é o
+  /// caso recorrente nas lojas. Enfileira `list_driver_issues` (mesmo
+  /// padrão de polling do [_openPrinterPicker] abaixo: a lista só existe
+  /// na própria máquina remota), e pra cada dispositivo encontrado
+  /// consulta o catálogo do bridge por VID/PID (já extraído no
+  /// PowerShell, ver quick_actions.rs::list_driver_issues) -- resolve com
+  /// 1 clique se já conhecido, oferece o driver serial nativo pra
+  /// CDC/ACM genérico, ou deixa cadastrar na hora se não.
+  Future<void> _openDriverIssuesPicker() async {
+    final rustdeskId = widget.item.rustdeskId;
+    if (rustdeskId == null || rustdeskId.isEmpty) return;
+    showToast('${translate("Detectar dispositivos sem driver")}: ${translate("executando...")}');
+    setState(() => _driverIssuesPickerLoading = true);
+    final (commandId, enqueueError) =
+        await gFFI.equipmentModel.enqueueCommand(rustdeskId, 'list_driver_issues');
+    if (commandId == null) {
+      if (!mounted) return;
+      showToast(
+          '${translate("Detectar dispositivos sem driver")}: ${translate("falha ao enviar comando")} -- ${enqueueError ?? translate("erro desconhecido")}');
+      setState(() => _driverIssuesPickerLoading = false);
+      return;
+    }
+
+    Map<String, dynamic>? resultCmd;
+    for (var i = 0; i < 20; i++) {
+      await Future.delayed(const Duration(seconds: 1));
+      final history = await gFFI.equipmentModel.listCommands(rustdeskId, limit: 20);
+      for (final c in history) {
+        if (c['id'] == commandId) {
+          final status = c['status']?.toString();
+          if (status == 'done' || status == 'failed') {
+            resultCmd = c;
+          }
+          break;
+        }
+      }
+      if (resultCmd != null) break;
+    }
+
+    if (!mounted) return;
+    setState(() => _driverIssuesPickerLoading = false);
+
+    if (resultCmd == null) {
+      showToast(translate('Máquina não respondeu a tempo -- confira o histórico de comandos'));
+      return;
+    }
+    if (resultCmd['status'] != 'done') {
+      showToast('${translate("Detectar dispositivos sem driver")}: ${translate("falhou")}');
+      return;
+    }
+
+    List<Map<String, dynamic>> devices = [];
+    try {
+      final resultJson = resultCmd['result_json'] as String?;
+      final parsed = jsonDecode(resultJson != null && resultJson.isNotEmpty ? resultJson : '{}');
+      final stdout = parsed['stdout']?.toString() ?? '';
+      final deviceData = jsonDecode(stdout.isNotEmpty ? stdout : '[]');
+      if (deviceData is List) {
+        devices = deviceData.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      } else if (deviceData is Map) {
+        devices = [Map<String, dynamic>.from(deviceData)];
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
+    if (devices.isEmpty) {
+      showToast(translate('Nenhum dispositivo com problema de driver encontrado'));
+      return;
+    }
+
+    // Consulta o catálogo pra cada dispositivo ANTES de mostrar a lista,
+    // pra já saber que botão oferecer em cada linha sem esperar de novo.
+    final catalogResults = <int, Map<String, dynamic>?>{};
+    for (var i = 0; i < devices.length; i++) {
+      final vid = devices[i]['VID']?.toString();
+      final pid = devices[i]['PID']?.toString();
+      if (vid != null && vid.isNotEmpty && pid != null && pid.isNotEmpty) {
+        catalogResults[i] = await gFFI.equipmentModel.lookupDriverCatalog(vid, pid);
+      }
+    }
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(translate('Dispositivos sem driver')),
+        content: SizedBox(
+          width: 460,
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemCount: devices.length,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (context, i) {
+              final d = devices[i];
+              final name = d['FriendlyName']?.toString() ?? translate('Dispositivo desconhecido');
+              final vid = d['VID']?.toString();
+              final pid = d['PID']?.toString();
+              final vidPidLabel = (vid != null && vid.isNotEmpty && pid != null && pid.isNotEmpty)
+                  ? 'VID_$vid&PID_$pid'
+                  : translate('VID/PID não identificado');
+              final catalog = catalogResults[i];
+              final looksLikeCdcAcm =
+                  name.toUpperCase().contains('CDC') || name.toUpperCase().contains('ACM');
+
+              Widget actionButton;
+              if (catalog != null) {
+                actionButton = ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    _runAction(
+                      'install_catalog_driver',
+                      params: {'filename': catalog['driver_filename']},
+                      label: '${translate("Instalar driver")}: ${catalog['device_name']}',
+                    );
+                  },
+                  child: Text(translate('Instalar')),
+                );
+              } else if (looksLikeCdcAcm) {
+                actionButton = ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    _runAction('install_usbser_driver',
+                        label: translate('Driver serial nativo (usbser)'));
+                  },
+                  child: Text(translate('Usar nativo')),
+                );
+              } else if (vid != null && vid.isNotEmpty && pid != null && pid.isNotEmpty) {
+                actionButton = OutlinedButton(
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    _openRegisterDriverCatalogDialog(vid, pid, name);
+                  },
+                  child: Text(translate('Cadastrar')),
+                );
+              } else {
+                actionButton = const SizedBox.shrink();
+              }
+
+              return ListTile(
+                dense: true,
+                title: Text(name),
+                subtitle: Text(catalog != null
+                    ? '$vidPidLabel — ${translate("catálogo")}: ${catalog['device_name']}'
+                    : vidPidLabel),
+                trailing: actionButton,
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: Text(translate('Close'))),
+        ],
+      ),
+    );
+  }
+
+  /// Cadastro na hora de aparelho desconhecido -- a partir daqui qualquer
+  /// loja com o mesmo VID/PID resolve sozinha (ver
+  /// [EquipmentModel.registerDriverCatalog]). Depois de cadastrar, já
+  /// dispara a instalação na mesma hora -- não faz sentido cadastrar e
+  /// deixar o técnico ter que achar o botão de instalar de novo.
+  void _openRegisterDriverCatalogDialog(String vid, String pid, String suggestedName) {
+    final nameController = TextEditingController(text: suggestedName);
+    String? filePath;
+    bool submitting = false;
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text('${translate("Cadastrar driver")}: VID_$vid&PID_$pid'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: nameController,
+                decoration: InputDecoration(labelText: translate('Nome do aparelho')),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      filePath ?? translate('Nenhum arquivo selecionado'),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      final result = await FilePicker.platform.pickFiles(
+                        type: FileType.custom,
+                        allowedExtensions: ['inf', 'zip'],
+                      );
+                      final path = result?.files.single.path;
+                      if (path != null) {
+                        setDialogState(() => filePath = path);
+                      }
+                    },
+                    child: Text(translate('Escolher arquivo (.inf/.zip)')),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: Text(translate('Cancel'))),
+            TextButton(
+              onPressed: (submitting || filePath == null || nameController.text.trim().isEmpty)
+                  ? null
+                  : () async {
+                      setDialogState(() => submitting = true);
+                      final deviceName = nameController.text.trim();
+                      showToast('${translate("Cadastrar driver")}: ${translate("enviando...")}');
+                      final (ok, error) = await gFFI.equipmentModel
+                          .registerDriverCatalog(vid, pid, deviceName, filePath!);
+                      if (!ok) {
+                        showToast(
+                            '${translate("Cadastrar driver")}: ${translate("falha")} -- ${error ?? translate("erro desconhecido")}');
+                        setDialogState(() => submitting = false);
+                        return;
+                      }
+                      Navigator.of(ctx).pop();
+                      showToast('${translate("Cadastrar driver")}: ${translate("cadastrado, instalando...")}');
+                      final filename = filePath!.split(RegExp(r'[\\/]')).last;
+                      _runAction(
+                        'install_catalog_driver',
+                        params: {'filename': filename},
+                        label: '${translate("Instalar driver")}: $deviceName',
+                      );
+                    },
+              child: submitting
+                  ? const SizedBox(
+                      width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  : Text(translate('Cadastrar e instalar')),
             ),
           ],
         ),
@@ -750,6 +994,7 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
         _sensitiveActionButton('reset_printers', translate('Reset printers')),
         _actionButton('reset_com_ports', translate('Reset COM ports')),
         _sensitiveActionButton('reinstall_usb_devices', translate('Reinstall USB devices')),
+        _driverIssuesPickerButton(),
         _driverPickerButton(),
         _programPickerButton(),
         _actionButton('restart_services', 'Tomcat', params: {'name_contains': ['tomcat']}),
@@ -778,6 +1023,15 @@ class _EquipmentDetailBodyState extends State<_EquipmentDetailBody> {
     return ElevatedButton(
       onPressed: () => _runAction(action, params: params, label: label),
       child: Text(label),
+    );
+  }
+
+  Widget _driverIssuesPickerButton() {
+    return ElevatedButton(
+      onPressed: _driverIssuesPickerLoading ? null : _openDriverIssuesPicker,
+      child: _driverIssuesPickerLoading
+          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+          : Text(translate('Detectar dispositivos sem driver')),
     );
   }
 

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:get/get.dart';
+import 'package:http/http.dart' as raw_http;
 
 import '../common.dart';
 import '../utils/http_service.dart' as http;
@@ -252,6 +253,52 @@ class EquipmentModel {
       return (id, null);
     } catch (e) {
       return (null, e.toString());
+    }
+  }
+
+  /// Catálogo de drivers por VID/PID (pedido de teste real, 2026-09-24) --
+  /// "Install driver" deixa de ser um pacote genérico escolhido a mão:
+  /// consulta se esse aparelho já é conhecido antes de pedir pro técnico
+  /// escolher qualquer coisa.
+  Future<Map<String, dynamic>?> lookupDriverCatalog(String vid, String pid) async {
+    final api = await bind.mainGetApiServer();
+    if (api.isEmpty || vid.isEmpty || pid.isEmpty) return null;
+    try {
+      final resp = await http.get(
+          Uri.parse('$api/internal/driver_catalog/lookup?vid=$vid&pid=$pid'));
+      if (resp.statusCode != 200) return null;
+      final body = jsonDecode(resp.body) as Map<String, dynamic>;
+      if (body['found'] != true) return null;
+      return body;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Cadastra um aparelho desconhecido no catálogo -- a partir daqui
+  /// qualquer loja com o mesmo VID/PID resolve sozinha. Upload direto via
+  /// `package:http` (multipart) em vez do wrapper `http_service.dart`
+  /// (que não suporta multipart) -- ação manual e rara do técnico, não
+  /// precisa do mesmo caminho consciente de proxy que o resto do app usa.
+  Future<(bool ok, String? error)> registerDriverCatalog(
+      String vid, String pid, String deviceName, String filePath) async {
+    final api = await bind.mainGetApiServer();
+    if (api.isEmpty) return (false, translate('Servidor da API não configurado'));
+    try {
+      final uri = Uri.parse('$api/internal/driver_catalog');
+      final request = raw_http.MultipartRequest('POST', uri)
+        ..fields['vid'] = vid
+        ..fields['pid'] = pid
+        ..fields['device_name'] = deviceName
+        ..files.add(await raw_http.MultipartFile.fromPath('file', filePath));
+      final streamed = await request.send();
+      if (streamed.statusCode != 200) {
+        final respBody = await streamed.stream.bytesToString();
+        return (false, 'HTTP ${streamed.statusCode}: $respBody');
+      }
+      return (true, null);
+    } catch (e) {
+      return (false, e.toString());
     }
   }
 }

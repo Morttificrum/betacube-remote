@@ -22,6 +22,21 @@ macro_rules! my_println{
     };
 }
 
+/// Proteção do app nas lojas (pedido de teste real, 2026-09-24): nenhum
+/// componente com janela/ícone de bandeja pode aparecer pro funcionário
+/// -- só o serviço em segundo plano. `preset-note` é escrito no config
+/// pelo instalador só quando `STORE_NAME` é passado (ver
+/// installer/betacube-installer.nsi e OPTION_PRESET_NOTE em
+/// hbbs_http/sync.rs, que já usa a mesma chave pra reportar a loja pro
+/// bridge) -- reaproveita o MESMO sinal, não introduz um novo. Vazio
+/// (instalador genérico, usado pra máquina-hub de técnico) preserva o
+/// comportamento de sempre. Sem cfg de plataforma -- usado também no
+/// branch de `--tray` abaixo, que roda pra qualquer SO (não só
+/// linux/windows), e `Config::get_option` já é cross-platform.
+fn is_hidden_store_client() -> bool {
+    !config::Config::get_option("preset-note").is_empty()
+}
+
 /// shared by flutter and sciter main function
 ///
 /// [Note]
@@ -89,7 +104,7 @@ pub fn core_main() -> Option<Vec<String>> {
         #[cfg(target_os = "windows")]
         let should_check_start_tray = crate::platform::is_self_service_running()
             && crate::platform::is_cur_exe_the_installed();
-        if should_check_start_tray && !crate::check_process("--tray", true) {
+        if should_check_start_tray && !is_hidden_store_client() && !crate::check_process("--tray", true) {
             #[cfg(target_os = "linux")]
             hbb_common::allow_err!(crate::platform::check_autostart_config());
             hbb_common::allow_err!(crate::run_me(vec!["--tray"]));
@@ -373,7 +388,7 @@ pub fn core_main() -> Option<Vec<String>> {
                 return None;
             }
         } else if args[0] == "--tray" {
-            if !crate::check_process("--tray", true) {
+            if !is_hidden_store_client() && !crate::check_process("--tray", true) {
                 crate::tray::start_tray();
             }
             return None;

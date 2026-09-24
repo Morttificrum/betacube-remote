@@ -71,6 +71,8 @@ fn execute(cmd: &PendingCommand) -> (String, Value) {
         "reset_com_ports" => reset_com_ports(),
         "reinstall_usb_devices" => reinstall_usb_devices(),
         "install_driver" => install_driver(cmd),
+        "install_catalog_driver" => install_catalog_driver(cmd),
+        "install_usbser_driver" => install_usbser_driver(),
         "scan_processos" => scan_processos(),
         "defender_full_scan" => defender_full_scan(),
         "network_http_proxy" => network_http_proxy(cmd),
@@ -620,10 +622,17 @@ fn disable_firewall() -> (String, Value) {
     )
 }
 
+/// Pedido de teste real (2026-09-24): "Install driver" agora consulta um
+/// catálogo por VID/PID no bridge -- extrai aqui mesmo (calculated
+/// property no PowerShell) em vez de fazer o Flutter reparsear o
+/// InstanceId depois, evita duplicar a regex nos dois lados.
 #[cfg(windows)]
 fn list_driver_issues() -> (String, Value) {
     run_powershell(
-        "Get-PnpDevice -Status Error | Select-Object FriendlyName,InstanceId,ConfigManagerErrorCode | ConvertTo-Json",
+        "Get-PnpDevice -Status Error | Select-Object FriendlyName,InstanceId,ConfigManagerErrorCode, \
+         @{Name='VID';Expression={if ($_.InstanceId -match 'VID_([0-9A-Fa-f]{4})') { $matches[1] } else { $null }}}, \
+         @{Name='PID';Expression={if ($_.InstanceId -match 'PID_([0-9A-Fa-f]{4})') { $matches[1] } else { $null }}} \
+         | ConvertTo-Json",
     )
 }
 
@@ -708,6 +717,82 @@ fn install_driver(cmd: &PendingCommand) -> (String, Value) {
             json!({"downloaded_to": dest_str, "launch_error": e.to_string()}),
         ),
     }
+}
+
+/// Instala um driver do catálogo Beta Cube (VID/PID -> aparelho -> driver,
+/// pedido de teste real 2026-09-24) via `pnputil /add-driver ... /install`
+/// -- silencioso, roda como SYSTEM, sem o problema de privilégio do
+/// `install_driver` acima (que abre instalador GRÁFICO na sessão do
+/// usuário; `pnputil` nunca precisa de janela). `pnputil /add-driver`
+/// adiciona ao driver store E o Windows casa sozinho com qualquer
+/// dispositivo presente compatível -- não precisa apontar pro InstanceId
+/// específico. Aceita .inf solto ou .zip (extrai e instala todo .inf
+/// encontrado dentro).
+#[cfg(windows)]
+fn install_catalog_driver(cmd: &PendingCommand) -> (String, Value) {
+    let filename = match cmd.params.get("filename").and_then(|v| v.as_str()) {
+        Some(f) if !f.is_empty() => f,
+        _ => {
+            return (
+                "failed".to_owned(),
+                json!({"error": "filename é obrigatório"}),
+            )
+        }
+    };
+    let base = crate::common::get_api_server(
+        hbb_common::config::Config::get_option("api-server"),
+        hbb_common::config::Config::get_option("custom-rendezvous-server"),
+    );
+    if base.is_empty() {
+        return (
+            "failed".to_owned(),
+            json!({"error": "api-server não configurado"}),
+        );
+    }
+
+    let url = format!("{}/drivers/{}", base, filename);
+    let dest = std::env::temp_dir().join(filename);
+    let dest_str = dest.to_string_lossy().to_string();
+    let (dl_status, dl_result) = run_powershell(&format!(
+        "Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing",
+        url.replace('\'', "''"),
+        dest_str.replace('\'', "''"),
+    ));
+    if dl_status != "done" || !dest.exists() {
+        return (
+            "failed".to_owned(),
+            json!({"error": "falha no download", "url": url, "detail": dl_result}),
+        );
+    }
+
+    let is_zip = filename.to_lowercase().ends_with(".zip");
+    let script = if is_zip {
+        let extract_dir = std::env::temp_dir().join(format!("{filename}_extracted"));
+        format!(
+            "Expand-Archive -Path '{dest}' -DestinationPath '{out}' -Force; \
+             $infPaths = @(Get-ChildItem -Path '{out}' -Recurse -Filter *.inf -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName); \
+             if (-not $infPaths) {{ Write-Output 'NENHUM_INF_ENCONTRADO'; exit 1 }}; \
+             $results = foreach ($inf in $infPaths) {{ pnputil /add-driver \"$inf\" /install 2>&1 }}; \
+             $results -join \"`n\"",
+            dest = dest_str.replace('\'', "''"),
+            out = extract_dir.to_string_lossy().replace('\'', "''"),
+        )
+    } else {
+        format!("pnputil /add-driver '{}' /install", dest_str.replace('\'', "''"))
+    };
+    let (install_status, install_result) = run_powershell(&script);
+    (
+        install_status,
+        json!({"downloaded_to": dest_str, "install_output": install_result}),
+    )
+}
+
+/// Fallback pra CDC/ACM genérico sem match no catálogo -- driver serial
+/// nativo do Windows (usbser.sys), já vem no sistema, não precisa baixar
+/// nada do bridge.
+#[cfg(windows)]
+fn install_usbser_driver() -> (String, Value) {
+    run_powershell("pnputil /add-driver C:\\Windows\\INF\\usbser.inf /install")
 }
 
 // --- Fase 2 do roadmap: antivírus em camadas -----------------------------

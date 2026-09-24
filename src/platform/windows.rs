@@ -636,6 +636,27 @@ extern "system" {
     fn BlockInput(v: BOOL) -> BOOL;
 }
 
+/// Avisa o bridge que o Windows está desligando de propósito (ver
+/// chamador em `run_service`'s event_handler) -- `post_request_sync` já
+/// é síncrono/bloqueante por design (roda seu próprio runtime tiny por
+/// dentro), seguro pra chamar aqui de uma thread solta, fora do runtime
+/// tokio principal deste serviço.
+fn notify_shutdown_to_bridge() {
+    let base = crate::common::get_api_server(
+        hbb_common::config::Config::get_option("api-server"),
+        hbb_common::config::Config::get_option("custom-rendezvous-server"),
+    );
+    if base.is_empty() {
+        return;
+    }
+    let id = hbb_common::config::Config::get_id();
+    let url = format!("{}/api/shutdown_notice", base);
+    let body = serde_json::json!({"id": id}).to_string();
+    if let Err(e) = crate::common::post_request_sync(url, body, "") {
+        log::warn!("Falha avisando shutdown pro bridge: {e}");
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
     let event_handler = move |control_event| -> ServiceControlHandlerResult {
@@ -644,6 +665,15 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
             ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
             ServiceControl::Stop | ServiceControl::Preshutdown | ServiceControl::Shutdown => {
                 send_close(crate::POSTFIX_SERVICE).ok();
+                // Pedido de teste real (2026-09-24): avisa o bridge que
+                // isso é desligamento normal do Windows, não processo
+                // morto/travado -- loja desliga o caixa à noite, isso não
+                // pode virar alerta (ver /api/shutdown_notice no bridge e
+                // alerts.py::evaluate_offline_watchdog). Numa thread solta,
+                // best-effort, sem esperar resposta -- o Windows dá pouco
+                // tempo pra esse handler retornar durante shutdown, não dá
+                // pra bloquear numa chamada de rede aqui.
+                std::thread::spawn(notify_shutdown_to_bridge);
                 ServiceControlHandlerResult::NoError
             }
             _ => ServiceControlHandlerResult::NotImplemented,
@@ -1682,7 +1712,15 @@ if exist \"{tmp_path}\\{app_name} Tray.lnk\" del /f /q \"{tmp_path}\\{app_name} 
         Config::set_option("api-server".into(), lic.api);
     }
 
-    let tray_shortcuts = if config::is_outgoing_only() {
+    // Proteção do app nas lojas (pedido de teste real, 2026-09-24): sem
+    // isso, TODO install (loja ou não) cria esse atalho, que abre o
+    // ícone de bandeja pra qualquer um que fizer login -- não existia
+    // distinção nenhuma antes. `preset-note` só vem preenchido quando o
+    // instalador tem STORE_NAME (ver installer/betacube-installer.nsi) --
+    // máquina-hub de técnico usa o instalador genérico, sem STORE_NAME,
+    // continua criando o atalho normalmente.
+    let is_hidden_store_client = !Config::get_option("preset-note").is_empty();
+    let tray_shortcuts = if config::is_outgoing_only() || is_hidden_store_client {
         "".to_owned()
     } else {
         format!("
@@ -3197,12 +3235,20 @@ pub fn install_service() -> bool {
     let filter = format!(" /FI \"PID ne {}\"", get_current_pid());
     Config::set_option("stop-service".into(), "".into());
     crate::ipc::EXIT_RECV_CLOSE.store(false, Ordering::Relaxed);
+    // Mesmo guard de install_me() -- proteção do app nas lojas, ver lá.
+    let tray_cmds = if Config::get_option("preset-note").is_empty() {
+        format!(
+            "cscript \"{tray_shortcut}\"\ncopy /Y \"{tmp_path}\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\\"",
+            app_name = crate::get_app_name(),
+        )
+    } else {
+        "".to_owned()
+    };
     let cmds = format!(
         "
 chcp 65001
 taskkill /F /IM {app_name}.exe{filter}
-cscript \"{tray_shortcut}\"
-copy /Y \"{tmp_path}\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\\"
+{tray_cmds}
 {import_config}
 {create_service}
 if exist \"{tray_shortcut}\" del /f /q \"{tray_shortcut}\"
@@ -3740,10 +3786,14 @@ if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{ap
         // tempo demais sem confirmar registro no rendezvous, o que ESTE
         // `sc failure`/watchdog nativo aqui então detecta normalmente
         // como saída real e relança.
+        // Pedido de teste real (2026-09-24, proteção nas lojas): reinício
+        // em 5s nas 3 primeiras quedas em vez de 60s/60s/300s -- o
+        // critério de aceite é "volta sozinho em poucos segundos" quando
+        // alguém finaliza o processo pelo Gerenciador de Tarefas.
         format!("
 sc create {app_name} binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{app_name} Service\"
 sc start {app_name}
-sc failure {app_name} reset= 86400 actions= restart/60000/restart/60000/restart/300000
+sc failure {app_name} reset= 86400 actions= restart/5000/restart/5000/restart/5000
 ",
     app_name = crate::get_app_name())
     }
