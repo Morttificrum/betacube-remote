@@ -704,7 +704,7 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
 
     let mut session_id = unsafe { get_current_session(share_rdp()) };
     log::info!("session id {}", session_id);
-    let mut h_process = launch_server(session_id, true).await.unwrap_or(NULL);
+    let mut h_process = launch_server_logged(session_id, true).await;
     let mut incoming = ipc::new_listener(crate::POSTFIX_SERVICE).await?;
     let mut stored_usid = None;
     loop {
@@ -719,7 +719,7 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
                 // https://github.com/rustdesk/rustdesk/discussions/10039
                 let count = ipc::get_port_forward_session_count(1000).await.unwrap_or(0);
                 if count == 0 {
-                    h_process = launch_server(session_id, true).await.unwrap_or(NULL);
+                    h_process = launch_server_logged(session_id, true).await;
                 }
             }
         }
@@ -772,6 +772,24 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
                 unsafe {
                     let tmp = get_current_session(share_rdp());
                     if tmp == 0xFFFFFFFF {
+                        // Causa raiz do "offline depois do reboot" (caso real:
+                        // caixa01/Itaquera, 24/09) -- sem sessão de console
+                        // detectável (WTSGetActiveConsoleSessionId retorna
+                        // 0xFFFFFFFF, ex.: tela de login ainda não passou por
+                        // ninguém), esse `continue` saía ANTES de chegar no
+                        // reforço de h_process nulo mais abaixo. Se o
+                        // `launch_server` inicial (linha ~707) tinha falhado
+                        // nesse meio tempo -- e `launch_privileged_process`
+                        // engole erro silenciosamente (`unwrap_or(NULL)`) --
+                        // h_process ficava nulo pra sempre enquanto a sessão
+                        // continuasse 0xFFFFFFFF: nenhum retry nunca era
+                        // tentado, a máquina nunca voltava a registrar
+                        // sozinha. Mantém o session_id atual (não dá pra
+                        // confiar em 0xFFFFFFFF como sessão de destino), mas
+                        // ainda tenta relançar se h_process estiver nulo.
+                        if h_process.is_null() {
+                            h_process = launch_server_logged(session_id, false).await;
+                        }
                         continue;
                     }
                     let mut close_sent = false;
@@ -832,6 +850,25 @@ async fn launch_server(session_id: DWORD, close_first: bool) -> ResultType<HANDL
         std::env::current_exe()?.to_str().unwrap_or("")
     );
     launch_privileged_process(session_id, &cmd)
+}
+
+/// Wrapper de `launch_server` que loga a falha em vez de engolir com
+/// `unwrap_or(NULL)` -- antes disso, uma falha aqui (ex.: sem token de
+/// sessão disponível) ficava invisível em log, dificultando diagnosticar
+/// o "offline depois do reboot" (caso real 2026-09-24). Retorna NULL em
+/// qualquer falha, igual ao comportamento anterior -- só adiciona o log.
+async fn launch_server_logged(session_id: DWORD, close_first: bool) -> HANDLE {
+    match launch_server(session_id, close_first).await {
+        Ok(ptr) => ptr,
+        Err(err) => {
+            log::error!(
+                "Failed to launch server (session_id={}): {}",
+                session_id,
+                err
+            );
+            NULL
+        }
+    }
 }
 
 pub fn launch_privileged_process(session_id: DWORD, cmd: &str) -> ResultType<HANDLE> {
@@ -3794,9 +3831,52 @@ if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{ap
 sc create {app_name} binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{app_name} Service\"
 sc start {app_name}
 sc failure {app_name} reset= 86400 actions= restart/5000/restart/5000/restart/5000
+{watchdog_task}
 ",
-    app_name = crate::get_app_name())
+    app_name = crate::get_app_name(),
+    watchdog_task = get_watchdog_task_cmds().unwrap_or_default())
     }
+}
+
+/// Watchdog independente por Tarefa Agendada (pedido de teste real,
+/// 2026-09-24, caso caixa01/Itaquera -- "já foi corrigido antes e
+/// voltou"): cobre qualquer classe de falha que os watchdogs internos
+/// (`sc failure` acima e `start_liveness_watchdog` em hbbs_http/sync.rs)
+/// não peguem, checando de FORA do próprio app/serviço. Roda como SYSTEM,
+/// a cada 1 minuto, sem depender de rede/bridge -- só confere se existe
+/// um processo `{app_name}.exe --server` de pé (é esse processo quem
+/// hospeda o RendezvousMediator/heartbeat real, ver core_main.rs); se não
+/// existir, reinicia o serviço, dando ao `run_service()` (agora corrigido
+/// pra também relançar sem sessão de console ativa) uma nova chance.
+fn get_watchdog_task_cmds() -> ResultType<String> {
+    let app_name = crate::get_app_name();
+    let dir = std::path::PathBuf::from(format!("C:\\ProgramData\\{}", app_name));
+    std::fs::create_dir_all(&dir)?;
+    let script_path = dir.join("watchdog.ps1");
+    let log_path = dir.join("watchdog.log");
+    let script = format!(
+        "$appName = '{app_name}'\r\n\
+         $logFile = '{log_path}'\r\n\
+         $serverProc = Get-CimInstance Win32_Process -Filter \"Name='$appName.exe'\" -ErrorAction SilentlyContinue |\r\n\
+         \x20\x20\x20\x20Where-Object {{ $_.CommandLine -like '*--server*' }}\r\n\
+         if (-not $serverProc) {{\r\n\
+         \x20\x20\x20\x20$ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'\r\n\
+         \x20\x20\x20\x20Add-Content -Path $logFile -Value \"$ts processo --server nao encontrado, reiniciando servico\" -ErrorAction SilentlyContinue\r\n\
+         \x20\x20\x20\x20Restart-Service -Name $appName -Force -ErrorAction SilentlyContinue\r\n\
+         }}\r\n",
+        app_name = app_name,
+        log_path = log_path.to_string_lossy(),
+    );
+    std::fs::write(&script_path, script)?;
+    let task_name = format!("{}Watchdog", app_name);
+    Ok(format!(
+        "
+schtasks /delete /tn \"{task_name}\" /f
+schtasks /create /tn \"{task_name}\" /tr \"powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \\\"{script_path}\\\"\" /sc minute /mo 1 /ru SYSTEM /rl HIGHEST /f
+",
+        task_name = task_name,
+        script_path = script_path.to_string_lossy(),
+    ))
 }
 
 fn run_after_run_cmds(silent: bool) {
