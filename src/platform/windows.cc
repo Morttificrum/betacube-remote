@@ -285,8 +285,14 @@ extern "C"
             {
                 // CreateProcessAsUserW exige os dois habilitados no processo
                 // CHAMADOR (o serviço), não no token de destino.
-                EnablePrivilege(SE_INCREASE_QUOTA_NAME);
-                EnablePrivilege(SE_ASSIGNPRIMARYTOKEN_NAME);
+                // Strings largas explícitas em vez de SE_INCREASE_QUOTA_NAME/
+                // SE_ASSIGNPRIMARYTOKEN_NAME (winnt.h) -- nesta unidade de
+                // compilação essas macros expandem pra `const char*` (TEXT()
+                // resolveu ANSI, não UNICODE), e EnablePrivilege espera
+                // LPCWSTR. Erro real, achado só agora no build do CI
+                // (cl.exe C2664) -- nunca tinha compilado de verdade antes.
+                EnablePrivilege(L"SeIncreaseQuotaPrivilege");
+                EnablePrivilege(L"SeAssignPrimaryTokenPrivilege");
 
                 CreateEnvironmentBlock(&lpEnvironment, // Environment block
                                        hToken,         // New token
