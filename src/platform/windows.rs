@@ -1853,10 +1853,10 @@ fn get_before_uninstall(kill_self: bool) -> String {
     format!(
         "
     chcp 65001
-    sc stop {app_name}
-    sc delete {app_name}
+    sc stop \"{app_name}\"
+    sc delete \"{app_name}\"
     taskkill /F /IM {broker_exe}
-    taskkill /F /IM {app_name}.exe{filter}
+    taskkill /F /IM \"{app_name}.exe\"{filter}
     reg delete HKEY_CLASSES_ROOT\\.{ext} /f
     reg delete HKEY_CLASSES_ROOT\\{ext} /f
     netsh advfirewall firewall delete rule name=\"{app_name} Service\"
@@ -3245,11 +3245,11 @@ pub fn uninstall_service(show_new_window: bool, _: bool) -> bool {
     let cmds = format!(
         "
     chcp 65001
-    sc stop {app_name}
-    sc delete {app_name}
+    sc stop \"{app_name}\"
+    sc delete \"{app_name}\"
     if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{app_name} Tray.lnk\" del /f /q \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{app_name} Tray.lnk\"
     taskkill /F /IM {broker_exe}
-    taskkill /F /IM {app_name}.exe{filter}
+    taskkill /F /IM \"{app_name}.exe\"{filter}
     ",
         app_name = crate::get_app_name(),
         broker_exe = WIN_TOPMOST_INJECTED_PROCESS_EXE,
@@ -3284,7 +3284,7 @@ pub fn install_service() -> bool {
     let cmds = format!(
         "
 chcp 65001
-taskkill /F /IM {app_name}.exe{filter}
+taskkill /F /IM \"{app_name}.exe\"{filter}
 {tray_cmds}
 {import_config}
 {create_service}
@@ -3455,7 +3455,7 @@ reg add {subkey} /f /v EstimatedSize /t REG_DWORD /d {size}
 
     let filter = format!(" /FI \"PID ne {}\"", get_current_pid());
     let restore_service_cmd = if is_service_running {
-        format!("sc start {}", &app_name)
+        format!("sc start \"{}\"", &app_name)
     } else {
         "".to_owned()
     };
@@ -3487,8 +3487,8 @@ reg add {subkey} /f /v EstimatedSize /t REG_DWORD /d {size}
     let cmds = format!(
         "
 chcp 65001
-sc stop {app_name}
-taskkill /F /IM {app_name}.exe{filter}
+sc stop \"{app_name}\"
+taskkill /F /IM \"{app_name}.exe\"{filter}
 {reg_cmd}
 {copy_exe}
 {rename_exe}
@@ -3776,12 +3776,12 @@ fn get_import_config(exe: &str) -> String {
         return "".to_string();
     }
     format!("
-sc stop {app_name}
-sc delete {app_name}
-sc create {app_name} binpath= \"\\\"{exe}\\\" --import-config \\\"{config_path}\\\"\" start= auto DisplayName= \"{app_name} Service\"
-sc start {app_name}
-sc stop {app_name}
-sc delete {app_name}
+sc stop \"{app_name}\"
+sc delete \"{app_name}\"
+sc create \"{app_name}\" binpath= \"\\\"{exe}\\\" --import-config \\\"{config_path}\\\"\" start= auto DisplayName= \"{app_name} Service\"
+sc start \"{app_name}\"
+sc stop \"{app_name}\"
+sc delete \"{app_name}\"
 ",
     app_name = crate::get_app_name(),
     config_path=Config::file().to_str().unwrap_or(""),
@@ -3827,10 +3827,19 @@ if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{ap
         // em 5s nas 3 primeiras quedas em vez de 60s/60s/300s -- o
         // critério de aceite é "volta sozinho em poucos segundos" quando
         // alguém finaliza o processo pelo Gerenciador de Tarefas.
+        // Bug real de campo (2026-09-25): `app_name` é "Beta Cube Remote"
+        // (com espaços, diferente do "RustDesk" original sem espaço) --
+        // TODO `sc create`/`start`/`failure` sem aspas ao redor de
+        // {app_name} faz o sc.exe ler só "Beta" como nome do serviço e
+        // tropeçar em "Cube"/"Remote" como parâmetros inválidos, falhando
+        // silenciosamente (o resto do .bat continua rodando normalmente,
+        // por isso nada mais dava sinal de erro). Serviço NUNCA era
+        // criado, em nenhuma instalação -- é a causa raiz real de
+        // "só funciona com a janela aberta, não sobrevive a reboot".
         format!("
-sc create {app_name} binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{app_name} Service\"
-sc start {app_name}
-sc failure {app_name} reset= 86400 actions= restart/5000/restart/5000/restart/5000
+sc create \"{app_name}\" binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{app_name} Service\"
+sc start \"{app_name}\"
+sc failure \"{app_name}\" reset= 86400 actions= restart/5000/restart/5000/restart/5000
 {watchdog_task}
 ",
     app_name = crate::get_app_name(),
