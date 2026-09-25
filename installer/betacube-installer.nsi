@@ -127,14 +127,29 @@ Section "Instalar ${APP_NAME}" SecMain
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\{54E86BC2-6C85-41F3-A9EB-1A94AC9B1F93}_is1"
   DeleteRegKey HKLM "Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{54E86BC2-6C85-41F3-A9EB-1A94AC9B1F93}_is1"
 
-  ; O --install é o auto-instalador completo do próprio RustDesk (serviço,
-  ; driver de impressora, atalhos e registro de desinstalação PRÓPRIOS,
-  ; independentes do NSIS -- ver src/platform/windows.rs::install_me). Roda
-  ; a partir da pasta TEMP (ver comentário lá acima), não de $INSTDIR.
+  ; --silent-install (NÃO --install) é o auto-instalador completo do
+  ; próprio RustDesk (serviço, driver de impressora, atalhos e registro
+  ; de desinstalação PRÓPRIOS, independentes do NSIS -- ver
+  ; src/platform/windows.rs::install_me, chamado com silent=true só por
+  ; --silent-install -- ver core_main.rs). Roda a partir da pasta TEMP
+  ; (ver comentário lá acima), não de $INSTDIR.
+  ;
+  ; BUG REAL DE CAMPO (2026-09-25, confirmado numa loja de verdade e na
+  ; VM Hyper-V de teste): "--install" puro abre uma tela de confirmação
+  ; Flutter ("Instalação" -- caminho, checkboxes de atalho, botões
+  ; "Aceitar e Instalar"/"Executar sem instalar") e ESPERA CLIQUE. Numa
+  ; instalação de loja feita por acesso remoto, ninguém sabe que precisa
+  ; clicar ali depois do wizard NSIS já ter dito "Concluir" -- o app fica
+  ; rodando em modo portátil (sem serviço do Windows nunca criado/
+  ; iniciado), exatamente o bug "só funciona com a janela aberta, não
+  ; sobrevive a reboot". "--silent-install" pula essa tela e roda
+  ; install_me() direto, incluindo a criação do serviço (get_create_service
+  ; em windows.rs -- sc create/start/failure).
+  ;
   ; Roda ANTES dos nossos CreateShortcut/WriteRegStr/WriteUninstaller de
   ; propósito: ele grava um UninstallString apontando pra si mesmo, e os
   ; passos abaixo sobrescrevem isso de novo pro nosso uninstall.exe.
-  ExecWait '"${TEMP_SRC}\${APP_EXE}" --install'
+  ExecWait '"${TEMP_SRC}\${APP_EXE}" --silent-install'
   RMDir /r "${TEMP_SRC}"
 
   ; NÃO cria atalho de área de trabalho/menu iniciar principal aqui --
