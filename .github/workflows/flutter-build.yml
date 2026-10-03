@@ -379,8 +379,12 @@ jobs:
   build-for-windows-sciter:
     name: ${{ matrix.job.target }} (${{ matrix.job.os }})
     runs-on: ${{ matrix.job.os }}
-    # Temporarily disable this action due to additional test is needed.
-    # if: false
+    # Beta Cube não usa 32-bit, e esse job (i686-pc-windows-msvc) falha
+    # faz tempo (ver runs 36065121999/36194434578/37137927215) -- não
+    # bloqueia o publish do x64 (jobs publicam release independentes),
+    # mas não tem por que continuar gastando runner nele. Desabilitado
+    # 2026-10-03, a pedido.
+    if: false
     strategy:
       fail-fast: false
       matrix:
