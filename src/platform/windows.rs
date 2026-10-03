@@ -1624,6 +1624,136 @@ fn get_after_install(
     ", create_service=get_create_service(&exe))
 }
 
+// Bug real, achado testando a VM BetaCubeTeste (2026-10-02/03): o NSIS
+// (installer/betacube-installer.nsi) escreve o toml com
+// server/key/relay/preset-note direto em "$APPDATA\${APP_NAME}\config"
+// ANTES de chamar `--silent-install` -- e `$APPDATA` é o perfil do
+// usuário que está rodando o instalador (NSIS pede
+// `RequestExecutionLevel admin`, nunca SYSTEM). `install_me()` também
+// grava key/custom-rendezvous-server/api-server via `Config::set_option`,
+// mesmo problema: isso usa `Config::path()`, que só redireciona pro
+// perfil do LocalService (`patch()`, em hbb_common/config.rs) quando o
+// processo atual É a conta SYSTEM de verdade -- um admin comum elevado
+// nunca passa por SYSTEM, então o redirecionamento nunca dispara. O
+// serviço de fundo (`--server`, lançado pelo SCM como LocalService) tem
+// perfil PRÓPRIO e nunca vê nada disso -- cai no servidor público do
+// RustDesk e nunca registra no hbbs da Beta Cube, mesmo com o serviço
+// "Em execução" e tudo certo no resto (só aparece funcionando enquanto a
+// janela do app está aberta, rodando como o usuário interativo mesmo).
+// Corrige copiando TODOS os tomls do config atual (sejam os escritos
+// pelo NSIS, sejam os do set_option acima) pro perfil do LocalService
+// também, sempre, independente de quem rodou o instalador.
+fn propagate_config_to_local_service_profile() -> ResultType<()> {
+    let src_dir = Config::path("");
+    if !src_dir.is_dir() {
+        bail!("Source config dir does not exist: {:?}", src_dir);
+    }
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_owned());
+    let dst_dir: PathBuf = [
+        system_root.as_str(),
+        "ServiceProfiles",
+        "LocalService",
+        "AppData",
+        "Roaming",
+        &crate::get_app_name(),
+        "config",
+    ]
+    .iter()
+    .collect();
+    if src_dir == dst_dir {
+        // Instalador já rodando como SYSTEM -- patch() já resolveu certo, nada a fazer.
+        return Ok(());
+    }
+    fs::create_dir_all(&dst_dir)?;
+    for entry in fs::read_dir(&src_dir)? {
+        let entry = entry?;
+        let p = entry.path();
+        if p.extension().map(|e| e == "toml").unwrap_or(false) {
+            if let Some(name) = p.file_name() {
+                fs::copy(&p, dst_dir.join(name))?;
+            }
+        }
+    }
+    log::info!(
+        "Propagated server config from {:?} to LocalService profile {:?}",
+        src_dir,
+        dst_dir
+    );
+    Ok(())
+}
+
+// Autocorreção (pedido 2026-10-03): qualquer máquina já instalada com o
+// bug acima (config no perfil errado, serviço caindo no servidor
+// público) se corrige sozinha na próxima vez que o serviço subir --
+// sem precisar reinstalar nem tocar em nada manualmente. Chamada do
+// início do `--server` em core_main.rs, antes do rendezvous mediator
+// começar. Ordem de tentativa: (1) copiar de outro perfil de usuário
+// que já tenha a config certa (ex. de quem rodou o instalador
+// originalmente), (2) cair pra licença embutida no próprio exe (mesma
+// fonte que `install_me` usa). Só dispara se `custom-rendezvous-server`
+// estiver vazio no perfil atual -- não faz nada em instalação já sã.
+pub fn self_heal_server_config() {
+    if !Config::get_option("custom-rendezvous-server").is_empty() {
+        return;
+    }
+    log::warn!("LocalService profile sem server config da Beta Cube -- tentando autocorreção");
+    match heal_from_other_user_profile() {
+        Ok(()) => {
+            log::info!("Autocorreção: config copiada de outro perfil de usuário");
+        }
+        Err(e) => {
+            log::warn!("Autocorreção (perfil de usuário) falhou: {e} -- tentando licença embutida");
+            if let Some(lic) = get_license() {
+                Config::set_option("key".into(), lic.key);
+                Config::set_option("custom-rendezvous-server".into(), lic.host);
+                Config::set_option("api-server".into(), lic.api);
+                Config::set_option("relay-server".into(), lic.relay);
+                log::info!("Autocorreção: config aplicada a partir da licença embutida");
+            } else {
+                log::error!("Autocorreção falhou: sem licença embutida e sem outro perfil com config -- serviço vai cair no servidor público");
+            }
+        }
+    }
+}
+
+fn heal_from_other_user_profile() -> ResultType<()> {
+    let app_name = crate::get_app_name();
+    let system_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+    let users_dir = PathBuf::from(format!("{system_drive}\\Users"));
+    let dst_dir = Config::path("");
+
+    for entry in fs::read_dir(&users_dir)? {
+        let Ok(entry) = entry else { continue };
+        let candidate_dir = entry
+            .path()
+            .join("AppData")
+            .join("Roaming")
+            .join(&app_name)
+            .join("config");
+        let toml2 = candidate_dir.join(format!("{app_name}2.toml"));
+        let Ok(content) = fs::read_to_string(&toml2) else {
+            continue; // não existe ou sem permissão de ler esse perfil -- tenta o próximo
+        };
+        if content.contains("custom-rendezvous-server = ''")
+            || !content.contains("custom-rendezvous-server")
+        {
+            continue; // perfil existe mas nunca foi configurado pra Beta Cube
+        }
+        fs::create_dir_all(&dst_dir)?;
+        for e2 in fs::read_dir(&candidate_dir)? {
+            let e2 = e2?;
+            let p = e2.path();
+            if p.extension().map(|e| e == "toml").unwrap_or(false) {
+                if let Some(name) = p.file_name() {
+                    fs::copy(&p, dst_dir.join(name))?;
+                }
+            }
+        }
+        return Ok(());
+    }
+    bail!("Nenhum outro perfil de usuário com server config encontrado");
+}
+
 pub fn install_me(options: &str, path: String, silent: bool, debug: bool) -> ResultType<()> {
     let uninstall_str = get_uninstall(false, false);
     let mut path = path.trim_end_matches('\\').to_owned();
@@ -1747,6 +1877,9 @@ if exist \"{tmp_path}\\{app_name} Tray.lnk\" del /f /q \"{tmp_path}\\{app_name} 
         Config::set_option("key".into(), lic.key);
         Config::set_option("custom-rendezvous-server".into(), lic.host);
         Config::set_option("api-server".into(), lic.api);
+        if let Err(e) = propagate_config_to_local_service_profile() {
+            log::error!("Failed to propagate server config to LocalService profile: {e}");
+        }
     }
 
     // Proteção do app nas lojas (pedido de teste real, 2026-09-24): sem

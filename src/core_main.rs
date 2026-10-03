@@ -406,6 +406,13 @@ pub fn core_main() -> Option<Vec<String>> {
             return None;
         } else if args[0] == "--server" {
             log::info!("start --server with user {}", crate::username());
+            // Autocorreção (2026-10-03, ver platform::windows::self_heal_server_config):
+            // antes de iniciar o rendezvous mediator, garante que ESTE perfil
+            // (o que o serviço de fundo realmente lê) tem a config da Beta
+            // Cube -- corrige sozinho qualquer instalação antiga/quebrada
+            // que só gravou a config no perfil de quem instalou.
+            #[cfg(windows)]
+            crate::platform::windows::self_heal_server_config();
             #[cfg(target_os = "linux")]
             {
                 hbb_common::allow_err!(crate::platform::check_autostart_config());
