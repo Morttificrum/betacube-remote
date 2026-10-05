@@ -1643,29 +1643,45 @@ fn get_after_install(
 // Corrige copiando TODOS os tomls do config atual (sejam os escritos
 // pelo NSIS, sejam os do set_option acima) pro perfil do LocalService
 // também, sempre, independente de quem rodou o instalador.
-fn propagate_config_to_local_service_profile() -> ResultType<()> {
-    let src_dir = Config::path("");
-    if !src_dir.is_dir() {
-        bail!("Source config dir does not exist: {:?}", src_dir);
+// C:\ProgramData é legível por qualquer conta local por padrão (incluindo
+// LocalService) -- diferente do perfil de outro usuário (ACL por owner,
+// não garante acesso nem pra Administrator elevado) e diferente de
+// tentar adivinhar/escrever direto no perfil do LocalService (mesmo
+// problema de ACL, só que ao contrário). É o lugar de staging ÚNICO,
+// previsível, que tanto o instalador (admin) quanto o serviço
+// (LocalService) sempre conseguem acessar. `icacls` reforça a leitura
+// pro LocalService mesmo que a ACL herdada de %PROGRAMDATA% não cubra
+// (varia por política/imagem do Windows).
+fn programdata_config_dir() -> PathBuf {
+    let programdata = std::env::var("ProgramData").unwrap_or_else(|_| "C:\\ProgramData".to_owned());
+    let app_name = crate::get_app_name();
+    [programdata.as_str(), app_name.as_str(), "config"]
+        .iter()
+        .collect()
+}
+
+fn grant_local_service_read(dir: &std::path::Path) {
+    let res = std::process::Command::new("icacls")
+        .arg(dir)
+        .arg("/grant")
+        .arg("*S-1-5-19:(OI)(CI)RX") // NT AUTHORITY\LOCAL SERVICE (SID bem-conhecido, funciona mesmo sem tradução de nome)
+        .output();
+    match res {
+        Ok(o) if o.status.success() => {
+            log::info!("icacls: LocalService read access granted on {:?}", dir)
+        }
+        Ok(o) => log::warn!(
+            "icacls failed on {:?}: {}",
+            dir,
+            String::from_utf8_lossy(&o.stderr)
+        ),
+        Err(e) => log::warn!("Failed to run icacls on {:?}: {e}", dir),
     }
-    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_owned());
-    let dst_dir: PathBuf = [
-        system_root.as_str(),
-        "ServiceProfiles",
-        "LocalService",
-        "AppData",
-        "Roaming",
-        &crate::get_app_name(),
-        "config",
-    ]
-    .iter()
-    .collect();
-    if src_dir == dst_dir {
-        // Instalador já rodando como SYSTEM -- patch() já resolveu certo, nada a fazer.
-        return Ok(());
-    }
-    fs::create_dir_all(&dst_dir)?;
-    for entry in fs::read_dir(&src_dir)? {
+}
+
+fn copy_tomls(src_dir: &std::path::Path, dst_dir: &std::path::Path) -> ResultType<()> {
+    fs::create_dir_all(dst_dir)?;
+    for entry in fs::read_dir(src_dir)? {
         let entry = entry?;
         let p = entry.path();
         if p.extension().map(|e| e == "toml").unwrap_or(false) {
@@ -1674,12 +1690,92 @@ fn propagate_config_to_local_service_profile() -> ResultType<()> {
             }
         }
     }
-    log::info!(
-        "Propagated server config from {:?} to LocalService profile {:?}",
-        src_dir,
-        dst_dir
-    );
     Ok(())
+}
+
+fn propagate_config_to_local_service_profile() -> ResultType<()> {
+    let src_dir = Config::path("");
+    if !src_dir.is_dir() {
+        bail!("Source config dir does not exist: {:?}", src_dir);
+    }
+
+    // Caminho principal: ProgramData, sempre acessível pro LocalService ler.
+    let pd_dir = programdata_config_dir();
+    copy_tomls(&src_dir, &pd_dir)?;
+    grant_local_service_read(&pd_dir);
+    log::info!("Propagated server config from {:?} to {:?}", src_dir, pd_dir);
+
+    // Também tenta o perfil do LocalService direto (melhor esforço -- se
+    // a ACL permitir, deixa tudo já pronto sem depender do self-heal no
+    // próximo start; se não permitir, o self-heal cobre a partir do
+    // ProgramData de qualquer forma).
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_owned());
+    let app_name = crate::get_app_name();
+    let ls_dir: PathBuf = [
+        system_root.as_str(),
+        "ServiceProfiles",
+        "LocalService",
+        "AppData",
+        "Roaming",
+        app_name.as_str(),
+        "config",
+    ]
+    .iter()
+    .collect();
+    if src_dir != ls_dir {
+        if let Err(e) = copy_tomls(&src_dir, &ls_dir) {
+            log::warn!(
+                "Best-effort copy to LocalService profile {:?} failed (ProgramData staging cobre isso): {e}",
+                ls_dir
+            );
+        }
+    }
+    Ok(())
+}
+
+// Extrai `key = '...'` de um toml por texto puro (sem depender da crate
+// `toml` nesse crate) -- `strip_prefix(key)` seguido de exigir '=' logo
+// depois (sem espaço no meio) evita falso-positivo tipo "key_pair"/
+// "key_confirmed" casando com a busca por "key".
+fn toml_string_value(content: &str, key: &str) -> Option<String> {
+    for line in content.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix(key) else { continue };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('=') else { continue };
+        let rest = rest.trim();
+        let rest = rest.strip_prefix('\'')?;
+        let end = rest.find('\'')?;
+        return Some(rest[..end].to_string());
+    }
+    None
+}
+
+// Aplica via `Config::set_option` (não só copia o arquivo): o `Config`
+// é cacheado em memória por processo (lazy_static) -- se o processo
+// `--server` já carregou a config (vazia) antes de chamar isso, só
+// trocar o arquivo no disco não muda nada pro processo atual, só no
+// próximo restart. `set_option` atualiza o cache em memória E o disco
+// na hora, então o autocorreção funciona AGORA, não só depois.
+fn apply_server_config_from_toml(content: &str) -> bool {
+    let host = toml_string_value(content, "custom-rendezvous-server").unwrap_or_default();
+    if host.is_empty() {
+        return false;
+    }
+    Config::set_option("custom-rendezvous-server".into(), host);
+    if let Some(v) = toml_string_value(content, "key") {
+        Config::set_option("key".into(), v);
+    }
+    if let Some(v) = toml_string_value(content, "api-server") {
+        Config::set_option("api-server".into(), v);
+    }
+    if let Some(v) = toml_string_value(content, "relay-server") {
+        Config::set_option("relay-server".into(), v);
+    }
+    if let Some(v) = toml_string_value(content, "preset-note") {
+        Config::set_option("preset-note".into(), v);
+    }
+    true
 }
 
 // Autocorreção (pedido 2026-10-03): qualquer máquina já instalada com o
@@ -1687,19 +1783,32 @@ fn propagate_config_to_local_service_profile() -> ResultType<()> {
 // público) se corrige sozinha na próxima vez que o serviço subir --
 // sem precisar reinstalar nem tocar em nada manualmente. Chamada do
 // início do `--server` em core_main.rs, antes do rendezvous mediator
-// começar. Ordem de tentativa: (1) copiar de outro perfil de usuário
-// que já tenha a config certa (ex. de quem rodou o instalador
-// originalmente), (2) cair pra licença embutida no próprio exe (mesma
-// fonte que `install_me` usa). Só dispara se `custom-rendezvous-server`
-// estiver vazio no perfil atual -- não faz nada em instalação já sã.
+// começar. Ordem de tentativa: (1) ProgramData (staging escrito pelo
+// instalador, SEMPRE legível -- ver propagate_config_to_local_service_
+// profile), (2) varrer perfil de outro usuário que já tenha a config
+// certa (best-effort, pode falhar por ACL -- LocalService pode não ter
+// acesso ao perfil de outro usuário mesmo), (3) cair pra licença
+// embutida no próprio exe (mesma fonte que `install_me` usa). Só
+// dispara se `custom-rendezvous-server` estiver vazio -- não faz nada
+// em instalação já sã.
 pub fn self_heal_server_config() {
     if !Config::get_option("custom-rendezvous-server").is_empty() {
         return;
     }
     log::warn!("LocalService profile sem server config da Beta Cube -- tentando autocorreção");
+
+    let pd_toml2 = programdata_config_dir().join(format!("{}2.toml", crate::get_app_name()));
+    if let Ok(content) = fs::read_to_string(&pd_toml2) {
+        if apply_server_config_from_toml(&content) {
+            log::info!("Autocorreção: config aplicada a partir do staging em ProgramData");
+            return;
+        }
+    }
+    log::warn!("Autocorreção (ProgramData) não resolveu -- tentando perfil de outro usuário");
+
     match heal_from_other_user_profile() {
         Ok(()) => {
-            log::info!("Autocorreção: config copiada de outro perfil de usuário");
+            log::info!("Autocorreção: config aplicada a partir de outro perfil de usuário");
         }
         Err(e) => {
             log::warn!("Autocorreção (perfil de usuário) falhou: {e} -- tentando licença embutida");
@@ -1710,7 +1819,7 @@ pub fn self_heal_server_config() {
                 Config::set_option("relay-server".into(), lic.relay);
                 log::info!("Autocorreção: config aplicada a partir da licença embutida");
             } else {
-                log::error!("Autocorreção falhou: sem licença embutida e sem outro perfil com config -- serviço vai cair no servidor público");
+                log::error!("Autocorreção falhou: sem licença embutida, sem ProgramData, sem outro perfil com config -- serviço vai cair no servidor público");
             }
         }
     }
@@ -1720,36 +1829,22 @@ fn heal_from_other_user_profile() -> ResultType<()> {
     let app_name = crate::get_app_name();
     let system_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
     let users_dir = PathBuf::from(format!("{system_drive}\\Users"));
-    let dst_dir = Config::path("");
 
     for entry in fs::read_dir(&users_dir)? {
         let Ok(entry) = entry else { continue };
-        let candidate_dir = entry
+        let toml2 = entry
             .path()
             .join("AppData")
             .join("Roaming")
             .join(&app_name)
-            .join("config");
-        let toml2 = candidate_dir.join(format!("{app_name}2.toml"));
+            .join("config")
+            .join(format!("{app_name}2.toml"));
         let Ok(content) = fs::read_to_string(&toml2) else {
             continue; // não existe ou sem permissão de ler esse perfil -- tenta o próximo
         };
-        if content.contains("custom-rendezvous-server = ''")
-            || !content.contains("custom-rendezvous-server")
-        {
-            continue; // perfil existe mas nunca foi configurado pra Beta Cube
+        if apply_server_config_from_toml(&content) {
+            return Ok(());
         }
-        fs::create_dir_all(&dst_dir)?;
-        for e2 in fs::read_dir(&candidate_dir)? {
-            let e2 = e2?;
-            let p = e2.path();
-            if p.extension().map(|e| e == "toml").unwrap_or(false) {
-                if let Some(name) = p.file_name() {
-                    fs::copy(&p, dst_dir.join(name))?;
-                }
-            }
-        }
-        return Ok(());
     }
     bail!("Nenhum outro perfil de usuário com server config encontrado");
 }
@@ -3969,7 +4064,19 @@ if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{ap
         // por isso nada mais dava sinal de erro). Serviço NUNCA era
         // criado, em nenhuma instalação -- é a causa raiz real de
         // "só funciona com a janela aberta, não sobrevive a reboot".
+        // Bug real (2026-10-03, teste VM BetaCubeTeste): reinstalar POR
+        // CIMA de uma instalação já em execução não reiniciava o serviço
+        // -- `sc create` falha silenciosamente "já existe" e `sc start`
+        // falha silenciosamente "já rodando", então o processo --server
+        // ANTIGO continuava de pé pra sempre, nunca lia o binário/config
+        // novo nem executava a autocorreção de perfil (self_heal_server_
+        // config só roda no INÍCIO do --server). Confirmado: PID do
+        // --server com CreationDate de dias antes da reinstalação.
+        // `sc stop` + espera antes do create/start garante que o
+        // processo novo sempre sobe de verdade a cada instalação/update.
         format!("
+sc stop \"{app_name}\"
+ping -n 3 127.0.0.1 >nul
 sc create \"{app_name}\" binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{app_name} Service\"
 sc start \"{app_name}\"
 sc failure \"{app_name}\" reset= 86400 actions= restart/5000/restart/5000/restart/5000
