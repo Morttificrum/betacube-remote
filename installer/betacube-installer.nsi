@@ -15,7 +15,14 @@
 ; órfãos, apontando pro nome antigo. É por isso que a instalação "terminava
 ; sem erro" mas o atalho não abria nada.
 !define APP_EXE "${APP_NAME}.exe"
-!define RUSTDESK_SERVER "140.238.184.251"
+; Nome em vez de IP (2026-10-05): o IP é Ephemeral na Oracle -- se mudar
+; (reboot/manutenção da instância), TODAS as lojas caem de uma vez até
+; alguém gerar e distribuir 32 instaladores novos. remote.betacube.com.br
+; é DNS only (nuvem cinza) no Cloudflare, nunca proxied -- UDP/as portas
+; 21115-21119 do RustDesk não passam pelo proxy da Cloudflare, só HTTP/
+; HTTPS. Aponta pro mesmo IP de hoje; se o IP mudar, só atualiza o
+; registro A, nenhum cliente precisa de instalador novo.
+!define RUSTDESK_SERVER "remote.betacube.com.br"
 !define RUSTDESK_KEY "YcoVB4h1Ldi08DJmV4X1Yk7u0gi0yQFmqCgbLwZ9wsk="
 !define INSTALL_DIR "$PROGRAMFILES64\${APP_NAME}"
 !define UNINSTALL_REG "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
