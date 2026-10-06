@@ -1849,6 +1849,31 @@ fn heal_from_other_user_profile() -> ResultType<()> {
     bail!("Nenhum outro perfil de usuário com server config encontrado");
 }
 
+// Bug real (2026-10-06, PC do usuário): dois atalhos pro mesmo exe --
+// `C:\Users\<usuário>\Desktop\{app}.lnk` (per-user, de alguma instalação
+// antiga antes do destino ter virado %PUBLIC%\Desktop) e
+// `C:\Users\Public\Desktop\{app}.lnk` (o atual, correto -- compartilhado
+// pra todo usuário da máquina). O instalador só cria/mantém o de
+// Public\Desktop (ver `shortcuts` acima) + Menu Iniciar, mas nunca
+// limpava o resíduo per-user de versões antigas. Roda ANTES de criar o
+// atalho novo em toda instalação/atualização -- varre o Desktop e o
+// Menu Iniciar de CADA usuário da máquina e apaga qualquer atalho
+// per-user do app (nome, e o de desinstalar), deixando só o
+// compartilhado.
+fn get_dedupe_shortcuts_cmd() -> String {
+    let app_name = crate::get_app_name();
+    format!(
+        "
+for /d %%U in (\"%SystemDrive%\\Users\\*\") do (
+    if exist \"%%U\\Desktop\\{app_name}.lnk\" del /f /q \"%%U\\Desktop\\{app_name}.lnk\"
+    if exist \"%%U\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\{app_name}.lnk\" del /f /q \"%%U\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\{app_name}.lnk\"
+    if exist \"%%U\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Uninstall {app_name}.lnk\" del /f /q \"%%U\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Uninstall {app_name}.lnk\"
+    if exist \"%%U\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\{app_name}\" rd /s /q \"%%U\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\{app_name}\"
+)
+        "
+    )
+}
+
 pub fn install_me(options: &str, path: String, silent: bool, debug: bool) -> ResultType<()> {
     let uninstall_str = get_uninstall(false, false);
     let mut path = path.trim_end_matches('\\').to_owned();
@@ -2028,6 +2053,7 @@ copy /Y \"{tmp_path}\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\
 {uninstall_str}
 chcp 65001
 md \"{path}\"
+{dedupe_shortcuts}
 {copy_exe}
 reg add {subkey} /f
 reg add {subkey} /f /v DisplayIcon /t REG_SZ /d \"{display_icon}\"
@@ -2067,6 +2093,7 @@ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{path}\\\"
         dels = if debug { "" } else { &dels },
         copy_exe = copy_exe_cmd(&src_exe, &exe, &path)?,
         import_config = get_import_config(&exe),
+        dedupe_shortcuts = get_dedupe_shortcuts_cmd(),
     );
     run_cmds(cmds, debug, "install")?;
     run_after_run_cmds(silent);
