@@ -52,6 +52,18 @@ UninstPage uninstConfirm
 UninstPage instfiles
 
 Section "Instalar ${APP_NAME}" SecMain
+  ; Bug real (2026-10-06, PC do usuário): sem isso, $SMPROGRAMS resolve
+  ; pro Menu Iniciar do usuário ATUAL (padrão do NSIS), não pro de todos
+  ; os usuários -- o CreateShortcut de "Desinstalar" mais abaixo criava
+  ; uma pasta per-user duplicada, sobrevivendo até ao `dedupe_shortcuts`
+  ; do lado Rust (que roda ANTES desse CreateShortcut, então nunca
+  ; pegava esse arquivo específico). Afeta TODO uso de $SMPROGRAMS/
+  ; $DESKTOP deste Section em diante, incluindo a limpeza de resíduo
+  ; "RustDesk" mais abaixo -- todo esse Section deve operar no contexto
+  ; "all" pra bater com o que o --install nativo já faz (atalho em
+  ; %PUBLIC%\Desktop, menu iniciar em %ProgramData%\...).
+  SetShellVarContext all
+
   ; NAO extrai direto em $INSTDIR -- ver get_uninstall() em
   ; src/platform/windows.rs: "if exist "{path}" rd /s /q "{path}"" roda
   ; INCONDICIONALMENTE (nao depende do registro) no INICIO de todo
@@ -203,6 +215,12 @@ Section "Instalar ${APP_NAME}" SecMain
 SectionEnd
 
 Section "Uninstall"
+  ; Mesmo motivo do Section principal -- sem isso, o Delete/RMDir do
+  ; "Desinstalar" mais abaixo olha o contexto per-user (onde NUNCA foi
+  ; criado depois do fix acima) e não o all-users (onde é criado de
+  ; verdade), deixando a pasta órfã pra sempre no desinstalar.
+  SetShellVarContext all
+
   ; --uninstall primeiro (para o serviço, mata o processo, remove driver de
   ; impressora/associação de arquivo -- get_before_uninstall em windows.rs),
   ; DEPOIS o NSIS limpa o que sobrar.
