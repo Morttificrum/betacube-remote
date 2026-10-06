@@ -1977,6 +1977,22 @@ if exist \"{tmp_path}\\{app_name} Tray.lnk\" del /f /q \"{tmp_path}\\{app_name} 
         }
     }
 
+    // Bug real, achado numa máquina de técnico reinstalada várias vezes
+    // (2026-10-06): "Desinstalar serviço" (menu da GUI, `uninstall_
+    // service()`) grava `stop-service='Y'` e NUNCA volta pra vazio no
+    // caminho de sucesso -- intencional pra quem desinstala o serviço de
+    // propósito, mas fica preso pra sempre nesse perfil depois disso.
+    // `get_create_service()` abaixo lê essa flag e, se for 'Y', PULA
+    // `sc create`/`sc start` inteiro -- toda reinstalação nessa máquina
+    // nunca recriava o serviço de verdade, a janela sempre virava seu
+    // próprio servidor embutido (exatamente o bug original "só funciona
+    // com a janela aberta", só que agora silencioso: sem serviço real, o
+    // app usa o fallback de servidor-embutido, que buga a renderização
+    // da janela -- fica branca -- depois de mexer em NAT/hwcodec).
+    // Reinstalar pelo instalador tem que SEMPRE garantir um serviço de
+    // verdade, independente de qualquer toggle manual anterior.
+    Config::set_option("stop-service".into(), "".into());
+
     // Proteção do app nas lojas (pedido de teste real, 2026-09-24): sem
     // isso, TODO install (loja ou não) cria esse atalho, que abre o
     // ícone de bandeja pra qualquer um que fizer login -- não existia
