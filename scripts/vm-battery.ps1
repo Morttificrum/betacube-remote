@@ -52,8 +52,13 @@ function Invoke-Guest([scriptblock]$Block, $ArgList = @()) {
 function Get-BridgeState([string]$HostName) {
     try {
         $d = Invoke-RestMethod -Uri $BridgeDevicesUrl -TimeoutSec 20
-        $d | Where-Object { $_.hostname -eq $HostName } | Sort-Object last_seen_at -Descending | Select-Object -First 1 `
-            hostname, rustdesk_id, last_seen_at, rendezvous_reachable, rendezvous_reachable_at
+        $r = $d | Where-Object { $_.hostname -eq $HostName } | Sort-Object last_seen_at -Descending | Select-Object -First 1
+        $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $age = { param($v) if ($null -eq $v -or "$v" -eq '') { 'n/d' } else { [int]($now - [double](("$v") -replace ',', '.')) } }
+        [pscustomobject]@{
+            hostname = $r.hostname; rustdesk_id = $r.rustdesk_id; rendezvous_reachable = $r.rendezvous_reachable
+            idade_last_seen_s = (& $age $r.last_seen_at); idade_reachable_s = (& $age $r.rendezvous_reachable_at)   # esperado: poucos segundos
+        }
     } catch { "bridge inacessivel: $($_.Exception.Message)" }
 }
 
@@ -134,9 +139,16 @@ switch ($Phase) {
     'Reboot' {
         for ($i = 1; $i -le $Count; $i++) {
             "=== Reinicio $i/$Count"
-            Restart-VM -Name $VmName -Force
+            # reinicio pelo proprio guest (mais fiel ao "usuario reinicia o PC"); Restart-VM -Force chegou a travar a VM no boot
+            try { Invoke-Command -VMName $VmName -Credential $Credential -ScriptBlock { shutdown.exe /r /t 0 /f } -ErrorAction Stop } catch { "(guest caiu durante o comando de reinicio: normal)" }
+            $sw = [Diagnostics.Stopwatch]::StartNew()
             Start-Sleep 20
-            Wait-Guest 600
+            $ok = $false
+            while ($sw.Elapsed.TotalSeconds -lt 420) {
+                try { Invoke-Command -VMName $VmName -Credential $Credential -ScriptBlock { 1 } -ErrorAction Stop | Out-Null; $ok = $true; break } catch { Start-Sleep 10 }
+            }
+            if (-not $ok) { "!!! VM NAO VOLTOU em 420 s (travou no boot) -- reset forcado do Hyper-V"; Stop-VM -Name $VmName -TurnOff -Force; Start-Sleep 5; Start-VM -Name $VmName; Wait-Guest 300 }
+            "guest voltou em $([int]$sw.Elapsed.TotalSeconds)s"
             Start-Sleep 60                       # tempo para o servico subir e registrar sozinho, sem clique
             $s = Invoke-Guest { param($app) [pscustomobject]@{ Host = $env:COMPUTERNAME; Servico = ((& sc.exe query $app) -join ' ') } } -ArgList $AppName
             $s | Format-List
@@ -146,12 +158,12 @@ switch ($Phase) {
     'NetCycle' {
         Wait-Guest
         $h = (Invoke-Guest { $env:COMPUTERNAME })
-        $vmNic = Get-VMNetworkAdapter -VMName $VmName
+        $swName = (Get-VMNetworkAdapter -VMName $VmName).SwitchName   # guardar ANTES de desconectar (depois fica vazio)
         "=== Rede DESCONECTADA"
         Disconnect-VMNetworkAdapter -VMName $VmName
         Start-Sleep 90
         "=== Rede RECONECTADA"
-        Connect-VMNetworkAdapter -VMNetworkAdapter $vmNic -SwitchName $vmNic.SwitchName
+        Connect-VMNetworkAdapter -VMName $VmName -SwitchName $swName
         Start-Sleep 90
         Get-BridgeState $h | Format-List       # esperado: volta sozinho, sem clique
     }

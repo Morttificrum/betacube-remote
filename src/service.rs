@@ -1,4 +1,4 @@
-use librustdesk::*;
+use betacube_core::*;
 
 #[cfg(not(target_os = "macos"))]
 fn main() {}
