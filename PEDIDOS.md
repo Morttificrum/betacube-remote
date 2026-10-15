@@ -12,11 +12,19 @@ Legenda: `[ ]` pendente · `[~]` em andamento · `[x]` entregue e testado
 
 ---
 
-## ⚠ Decisão de arquitetura em aberto (BACKLOG, 2026-10-07) — Fernando precisa confirmar/reconciliar
+## ✅ DECISÃO DEFINITIVA DE ARQUITETURA (Fernando, 2026-10-15) — substitui o aviso de divergência de 2026-10-07
 
-O BACKLOG registrava: **fork `betacube-remote` pausado, 3 programas separados** — (1) Acesso Remoto = RustDesk oficial puro, só servidor/chave via custom client, zero mudança de código; (2) **Beta Cube Agent** (serviço Windows na loja: heartbeat, sensores, inventário, Ações Rápidas, pinpad Gertec); (3) **Beta Cube Painel** (app desktop do Fernando: lojas > máquinas, status, Ações Rápidas, botão Conectar, chamado GLPI automático). Reaproveita bridge/banco/lógica de sensores-ações-GLPI; **não** reaproveita o código Rust/Dart do fork (só referência de leitura). Ordem planejada: RustDesk oficial → Agent v1 (heartbeat/inventário) → Agent v2 (Ações Rápidas) → Painel v1 (lista + Conectar) → Painel v2 (Ações Rápidas + GLPI) → rollout nas 33 lojas. "Sem commit novo no fork até decisão em contrário." Plano completo em `Cerebro Claude/Projects/Beta Cube Remote - Decisao Arquitetura 2026-10-07.md`.
-Isso é compatível com §0 (núcleo congelado + `betacube-agent` separado), mas diverge de "um único app reúne tudo" (o Painel passaria a ser um app à parte do RustDesk). **Nenhum pedido abaixo foi alterado por causa disso — aguardando aprovação do Fernando.**
+- **Beta Cube Remote = nosso fork, CONGELADO** na última versão que funcionava em produção com o servidor próprio. Commit/build exato do congelamento: **[A CONFIRMAR PELO FERNANDO — candidato: `9cb56871e`, ver relatório de 2026-10-15]**.
+- **PROIBIDO:** sincronizar/mergear com o repositório oficial do RustDesk; adicionar qualquer função nova ao código do Remote. **Permitido no Remote só:** branding (nome, ícones, cores, textos) e correção de bug crítico, sempre testada na VM Hyper-V.
+- **Nada de "RustDesk" pode aparecer para o cliente** (executável, janela, bandeja, instalador, textos, ícones, serviço do Windows). Pendências levantadas em 2026-10-15 estão na seção 2 (Branding).
+- **Todas as funções Beta Cube saem do Remote** e vão para 2 programas com marca Beta Cube:
+  1. **Beta Cube Agent** — serviço Windows invisível em cada máquina de loja. Base: `C:\projetos\Beta Cube Monitor` (Python).
+  2. **Beta Cube Painel** — app nativo (Windows + Android, **NUNCA navegador**) com lojas/máquinas e botões rápidos que agem na máquina via Agent.
+- Funções que já estão no Remote (`src/quick_actions.rs`, aba Equipment, etc.) são **portadas** para o Agent/Painel. **Só se remove do Remote depois que a versão nova estiver testada e funcionando.**
+- Efeito sobre os pedidos abaixo: **nenhum pedido foi removido.** Os itens de §3 em diante (e as Quick Actions, monitoramento, drivers, rede, IA) passam a ser implementados no Agent ou no Painel, não no Remote. A frase de §0 "um único app reúne tudo" fica substituída por esta decisão (Remote + Agent + Painel). O bridge/banco/lógica de sensores-ações-GLPI são reaproveitados; o código Rust/Dart do fork serve só de referência de leitura.
+- Ordem prevista (herdada do plano de 2026-10-07): Agent v1 (heartbeat/inventário) → Agent v2 (Ações Rápidas) → Painel v1 (lista + Conectar) → Painel v2 (Ações Rápidas + GLPI) → rollout nas 33 lojas, sem prazo fixo.
 
+---
 **Regra fixa de release (2026-10-06):** nenhuma versão vai pra loja sem passar nos 7 passos do checklist (`AGENTS.md`) na VM **e** no PC do Fernando, com prova de cada um: instalar por cima, 1 atalho só, serviço criado/rodando, janela abre normal com ID/senha, registro no hbbs, conexão com janela fechada, reinício e tudo volta sozinho. Fernando não testa em loja.
 
 ---
@@ -26,7 +34,7 @@ Isso é compatível com §0 (núcleo congelado + `betacube-agent` separado), mas
 - [ ] Núcleo do RustDesk **congelado** na última release estável. Proibido mexer no motor (Rust/Flutter), exceto branding e servidor.
 - [ ] Toda funcionalidade Beta Cube fica em módulo/agente separado (`betacube-agent`). Se o agente falhar, o acesso remoto continua funcionando.
 - [ ] Tudo nativo (.exe / .apk). **Nada via navegador.** Referência de qualidade: AnyDesk / TeamViewer.
-- [ ] Um único app reúne tudo: acesso remoto, gestão de equipamentos, clientes/lojas, monitoramento, drivers, ferramentas.
+- [ ] Um único app reúne tudo: acesso remoto, gestão de equipamentos, clientes/lojas, monitoramento, drivers, ferramentas. *(Substituído em 2026-10-15 pela decisão definitiva: Remote congelado + Beta Cube Agent + Beta Cube Painel — ver topo. Item mantido para registro.)*
 - [ ] Commit após cada etapa testada.
 - [~] Nas máquinas das lojas o Remote roda em segundo plano, como serviço; o funcionário não consegue finalizar.
   - Status (BACKLOG): "Proteção das lojas", pedida 2026-09-24, em andamento. Implementado no commit `2941d1132`: `preset-note` (nome da loja) suprime janela/bandeja; `sc failure` reduzido de 60s/60s/300s para 5s/5s/5s; serviço avisa o bridge no shutdown nativo do Windows (`/api/shutdown_notice`); watchdog de heartbeat do bridge (`evaluate_offline_watchdog`) só alerta se não houver aviso de shutdown mais recente que o último heartbeat.
@@ -148,3 +156,22 @@ Cada etapa mostra o resultado; nada destrutivo roda sem confirmação.
 - [x] **Migração IP → nome do servidor** (2026-10-06): `remote.betacube.com.br` (A record, DNS only na Cloudflare; UDP não passa pelo proxy) aponta para o IP atual da VM Oracle (Ephemeral); `installer/betacube-installer.nsi` usa o nome (commit `9cb56871e`); `ops/check-ip-and-update-dns.sh` no cron da VM (a cada 5 min) detecta mudança de IP, atualiza o DNS e avisa no Telegram — testado quebrando o DNS de propósito. Validado na VM `BetaCubeTeste` (registra no hbbs pelo nome) antes de regenerar os 32 instaladores.
 - [x] **Cert TLS do helpdesk vencido + 500 na aba Equipment** (incidente 2026-10-01/02): cert renovado via acme.sh com auto-renovação (cron do `opc`, 4x/dia; válido até 2026-11-29); `/internal/equipment` do bridge cai para a lista local se o GLPI falhar (header `X-Glpi-Status: degraded`); alerta de expiração de cert (`ops/check-cert-expiry.sh`, cron diário 08:00, ≤14 dias). kdump desabilitado na VM Oracle (`crashkernel=no` via `grubby`) → RAM utilizável 498 Mi → 945 Mi. **Regra: nunca rodar `dnf` na VM Oracle do GLPI/RustDesk nem na da RH-360** (travou a VM por OOM).
   - `manage.betacube.com.br` (MeshCentral): obsoleto, desativado em 2026-10-02.
+
+## 11. Como tem que funcionar — Agent, Painel, instalador único e troca nas lojas (Fernando, 2026-10-15)
+
+**Requisitos (todos `[ ]`, nenhum removido ou simplificado):**
+
+- [ ] Tudo é `.exe` instalado com instalador Beta Cube, igual AnyDesk. **Nada de Python/script visível** na máquina da loja.
+- [ ] **Beta Cube Agent:** linguagem que gere `.exe`/serviço Windows nativo **sem falso positivo de antivírus** (evitar PyInstaller; avaliar C#/.NET ou Rust). **Portar** a lógica do Beta Cube Monitor (`C:\projetos\Beta Cube Monitor`: `hardware_monitor.py`, `disk_health.py`, `power_health.py`, `windows_health.py`, `security_scanner.py`, `windows_defender_scan.py`, `diagnostico.py`, `system_maintenance.py`, `agendador.py`, `telegram_bot.py`) — **não reescrever a regra de negócio do zero**.
+- [ ] **UM instalador por loja** (evolução de `scripts/gerar-instalador-loja.ps1`): instala Beta Cube Remote + Agent juntos, com o nome da loja embutido; registra a máquina no GLPI agrupada na loja (Servidor, Caixa 01, Caixa 02...). **Instalação silenciosa, sem perguntar nada ao funcionário.**
+- [ ] **Painel (Windows + Android nativos):** lista por loja > máquina mostrando nome da loja, nome da máquina, se é servidor, online/offline e saúde. Ao abrir um acesso, **nome da loja e da máquina ficam visíveis na janela** do acesso.
+- [ ] **Plano de troca nas lojas** sem perder acesso a nenhuma máquina no meio do caminho (abaixo).
+
+**Plano de troca (ordem proposta — a aprovar pelo Fernando):**
+0. Congelar o Remote no commit confirmado (topo do arquivo) e fechar o branding sem "RustDesk" (§2). Testar tudo na VM Hyper-V, incluindo atualização por cima de uma instalação antiga.
+1. **Etapa aditiva (zero risco de perder acesso):** instalar só o Agent ao lado do Remote que já está na loja. Não toca no Remote nem no AnyDesk. Conferir heartbeat/inventário no bridge e no Painel. Se o Agent falhar, o acesso remoto continua como estava.
+2. **Piloto:** uma loja pequena, uma máquina por vez, com o AnyDesk de reserva ainda instalado e a máquina vista pelo Painel antes de começar.
+3. **Troca do Remote por cima** (instalador novo da loja sobre o antigo), só em máquina que já tem Agent respondendo e acesso de reserva ativo. Ordem dentro da loja: caixas primeiro, **servidor por último**; nunca duas máquinas da mesma loja ao mesmo tempo. Aceite por máquina: online com a janela fechada, reinício, serviço volta sozinho.
+4. **Rollback:** o instalador/versão anterior de cada loja fica guardado; se a máquina não voltar online em poucos minutos, o Agent (ou a tarefa de watchdog) reverte, e o AnyDesk de reserva cobre o intervalo.
+5. **Só depois** de todas as lojas migradas e validadas: remover AnyDesk de reserva e, por fim, remover as funções Beta Cube do código do Remote (regra do topo: só após a versão nova testada).
+6. Observação: 29 das 33 lojas nunca registraram heartbeat (BACKLOG, 2026-10-02) — para elas pode ser instalação limpa em vez de troca; confirmar com o Fernando.
