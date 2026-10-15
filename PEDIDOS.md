@@ -54,6 +54,8 @@ Legenda: `[ ]` pendente · `[~]` em andamento · `[x]` entregue e testado
 ## 2. Branding
 
 - [ ] Whitelabel completo: nome, ícones, splash, textos internos (não só o instalador).
+  - Paleta da marca (memória, 2026-09-08): blocos do logo `#A6371A`/`#2E8B2A`/`#E8881F`/`#1E50D2`; acento do site `#22D3EE` sobre `#070B16`; no app `MyTheme.accent`→`#22D3EE` e `ColorScheme.primary`→`#1E50D2` (`flutter/lib/common.dart`). Já feito em jul–set/2026: pubspec, strings de UI/About/título da janela, 50 arquivos `src/lang/*.rs`, ícone gerado de `res/icon-source-1024.png` para todas as plataformas (`logo.svg`/`icon.svg` têm a marca como imagem raster dentro de SVG, não vetor redesenhado; o wordmark do `logo-header.svg` virou `<text>` por instrução do Fernando).
+  - Deliberadamente NÃO tocado (2026-09): `MyTheme.button` (`#2C8CFF`), link azul isolado do chat, empacotamento Linux, iOS `AppIcon`, `applicationId com.carriez.flutter_hbb` do Android. Decisão de 2026-10-15: nada de "RustDesk" visível ao cliente (ver topo).
 - [ ] Aplicar o ícone oficial (grade de 4 quadrados nas cores da marca + círculo ciano com cursor) em todas as plataformas.
 - [ ] Aparência profissional: o cliente deve sentir que é um produto da Beta Cube, "não um programa aleatório".
 
@@ -62,6 +64,7 @@ Legenda: `[ ]` pendente · `[~]` em andamento · `[x]` entregue e testado
 - [ ] Várias senhas simultâneas por máquina (~5), cada uma com nível de permissão (controle total, só visualização, admin, RH...).
 - [ ] Build Android (.apk) para acessar as lojas pelo celular (prioridade: equipe de 3-4 pessoas em campo).
 - [ ] iOS (por último).
+  - Divergência registrada: a memória de 2026-09-08 anotava iOS como fora de escopo ("sem distribuição iOS"); este pedido mantém iOS "por último". Fernando confirma qual vale.
 
 ## 4. Gestão de equipamentos / clientes
 
@@ -116,6 +119,7 @@ Cada etapa mostra o resultado; nada destrutivo roda sem confirmação.
 - [ ] Sensores: temperatura CPU/GPU/HD, voltagens, RPM de cooler (base: LibreHardwareMonitor).
 - [ ] Saúde do disco (SMART) e da memória RAM.
 - [ ] Drivers desatualizados/faltando.
+- [ ] Saúde geral do Windows (`windows_health.py` do Monitor): erros críticos do Event Log nas últimas 24 h; serviços críticos parados (wuauserv, WinDefend, Dnscache, BITS, EventLog, RpcSs); atualizações pendentes; uptime; disco com menos de 10% livre.
 - [ ] Detecção de problemas elétricos.
 - [ ] Antivírus em camadas: Defender → CIRCL → MalwareBazaar → VirusTotal. Só alerta, nunca apaga.
 - [ ] Alertas só quando algo precisa de atenção (sem "tudo OK" no Telegram).
