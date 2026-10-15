@@ -2,14 +2,14 @@
 
 ## Backlog
 
-* `BACKLOG.md` (raiz do projeto) é a fonte de verdade dos pedidos
+* `PEDIDOS.md` (raiz do projeto) é a fonte única de verdade dos pedidos
   pendentes do usuário — toda sessão nova começa lendo ele.
-* Todo pedido novo do usuário entra em `BACKLOG.md` na hora (descrição,
+* Todo pedido novo do usuário entra em `PEDIDOS.md` na hora (descrição,
   data, status), mesmo que a implementação comece depois.
 * Nenhum item vira "Feito" sem evidência de teste real anexada — código
   commitado/buildado não é evidência suficiente por si só.
-* Atualizar a seção "Onde paramos" (topo do arquivo) sempre que terminar
-  uma etapa, e sempre antes de qualquer `/compact`.
+* Atualizar o status do item (`[ ]`/`[~]`/`[x]`, com data e commit) no `PEDIDOS.md` sempre que terminar\
+  uma etapa, e sempre antes de qualquer `/compact`. (O `BACKLOG.md` virou só um ponteiro para o `PEDIDOS.md`.)
 
 ## Checklist obrigatório de release (regra fixa, 2026-10-06)
 
