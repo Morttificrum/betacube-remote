@@ -1,4 +1,4 @@
-#Requires -Version 5
+﻿#Requires -Version 5
 <#
 .SYNOPSIS
 Bateria de teste do Beta Cube Remote na VM Hyper-V BetaCubeTeste (checklist de 7 passos
@@ -80,8 +80,20 @@ switch ($Phase) {
         Wait-Guest
         $name = Split-Path $Installer -Leaf
         Invoke-Guest { New-Item -ItemType Directory -Force C:\Temp | Out-Null }
-        Copy-VMFile -Name $VmName -SourcePath $Installer -DestinationPath "C:\Temp\$name" -CreateFullPath -FileSource Host -Force
-        Invoke-Guest { param($n) $p = Start-Process "C:\Temp\$n" -ArgumentList '/S' -Wait -PassThru; "ExitCode do instalador: $($p.ExitCode)" } -ArgList $name
+        # PSSession (PowerShell Direct) em vez de Copy-VMFile: nao depende do servico de integracao "Interface de Servico de Convidado"
+        $s = New-PSSession -VMName $VmName -Credential $Credential
+        try { Copy-Item -Path $Installer -Destination "C:\Temp\$name" -ToSession $s -Force } finally { Remove-PSSession $s }
+        # O NSIS termina com um MessageBox MB_OK sem /SD (nao e silencioso de verdade): em sessao nao interativa ele
+        # trava. Espera o fim real da instalacao (uninstall.exe escrito + servico existente) e encerra o setup.
+        Invoke-Guest { param($n)
+            $p = Start-Process "C:\Temp\$n" -ArgumentList '/S' -PassThru
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            while (-not $p.HasExited -and $sw.Elapsed.TotalSeconds -lt 420) {
+                if ((Test-Path 'C:\Program Files\Beta Cube Remote\uninstall.exe') -and ($sw.Elapsed.TotalSeconds -gt 60)) {
+                    Start-Sleep 20; "Setup preso no MessageBox final ('instalado com sucesso') -- encerrando setup apos conclusao dos passos"; Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; break }
+                Start-Sleep 5 }
+            "Tempo ate concluir: $([int]$sw.Elapsed.TotalSeconds)s; HasExited=$($p.HasExited)"
+        } -ArgList $name
         Start-Sleep 20   # --silent-install roda em processo filho depois do NSIS "concluir"
         "Instalado: $name"
     }
