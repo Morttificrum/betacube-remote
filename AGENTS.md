@@ -1,5 +1,33 @@
 # RustDesk Guide
 
+## Backlog
+
+* `BACKLOG.md` (raiz do projeto) é a fonte de verdade dos pedidos
+  pendentes do usuário — toda sessão nova começa lendo ele.
+* Todo pedido novo do usuário entra em `BACKLOG.md` na hora (descrição,
+  data, status), mesmo que a implementação comece depois.
+* Nenhum item vira "Feito" sem evidência de teste real anexada — código
+  commitado/buildado não é evidência suficiente por si só.
+* Atualizar a seção "Onde paramos" (topo do arquivo) sempre que terminar
+  uma etapa, e sempre antes de qualquer `/compact`.
+
+## Checklist obrigatório de release (regra fixa, 2026-10-06)
+
+**NADA de versão nova vai pra loja sem passar nos 7 passos abaixo, na
+VM E no PC do usuário, com prova de cada um.** O usuário não testa em
+loja — ele só recebe o caminho do instalador depois de todos passarem:
+
+1. Instalar por cima de uma versão antiga já existente (não instalação
+   limpa).
+2. 1 atalho só (sem duplicado).
+3. Serviço criado e rodando (`sc.exe query`, nunca `sc` sem `.exe` no
+   PowerShell — é alias de `Set-Content`).
+4. Janela abre normal, com ID e senha visíveis (não branca).
+5. Registro confirmado no hbbs.
+6. Conexão remota funcionando com a janela do app fechada.
+7. Reinício do PC — tudo volta sozinho (serviço + registro) sem
+   intervenção.
+
 ## Project Layout
 
 ### Directory Structure
