@@ -1751,6 +1751,27 @@ fn toml_string_value(content: &str, key: &str) -> Option<String> {
     None
 }
 
+// Bug real (2026-10-15, PC do Fernando): `preset-note` (nome da loja => app escondido, sem janela/bandeja)
+// ficava preso depois de um instalador DE LOJA (ex.: TesteVM de 06/10) e sobrevivia a instalar o instalador
+// GENERICO por cima -- o perfil do usuario e o do LocalService continuavam com `preset-note = 'TesteVM'`
+// (`install_me` so definia preset-note, nunca limpava) e o "generico" abria sem janela nem icone. O NSIS grava
+// o toml do instalador em `C:\ProgramData\<app>\config\<app>2.toml` (SetShellVarContext all): com STORE_NAME tem
+// `preset-note`, sem STORE_NAME nao tem. Esse arquivo e a fonte de verdade: aplica (ou LIMPA) o preset-note
+// a partir dele ANTES de propagar a config pro LocalService.
+fn reconcile_preset_note_from_installer_toml() {
+    let toml2 = programdata_config_dir().join(format!("{}2.toml", crate::get_app_name()));
+    let Ok(content) = fs::read_to_string(&toml2) else {
+        return; // sem toml do instalador (instalacao manual): nao mexe
+    };
+    if toml_string_value(&content, "custom-rendezvous-server").is_none() {
+        return; // nao parece o toml gravado pelo NSIS: nao confia
+    }
+    let wanted = toml_string_value(&content, "preset-note").unwrap_or_default();
+    if Config::get_option("preset-note") != wanted {
+        log::info!("preset-note reconciliado com o instalador: {:?} -> {:?}", Config::get_option("preset-note"), wanted);
+        Config::set_option("preset-note".into(), wanted);
+    }
+}
 // Aplica via `Config::set_option` (não só copia o arquivo): o `Config`
 // é cacheado em memória por processo (lazy_static) -- se o processo
 // `--server` já carregou a config (vazia) antes de chamar isso, só
@@ -1993,13 +2014,15 @@ if exist \"{tmp_path}\\{app_name} Tray.lnk\" del /f /q \"{tmp_path}\\{app_name} 
     let src_exe = std::env::current_exe()?.to_str().unwrap_or("").to_string();
 
     // potential bug here: if run_cmd cancelled, but config file is changed.
+    reconcile_preset_note_from_installer_toml();
     if let Some(lic) = get_license() {
         Config::set_option("key".into(), lic.key);
         Config::set_option("custom-rendezvous-server".into(), lic.host);
         Config::set_option("api-server".into(), lic.api);
-        if let Err(e) = propagate_config_to_local_service_profile() {
-            log::error!("Failed to propagate server config to LocalService profile: {e}");
-        }
+    }
+    // Sempre propaga (antes so com licenca embutida): o preset-note reconciliado acima tambem tem que chegar ao perfil do LocalService.
+    if let Err(e) = propagate_config_to_local_service_profile() {
+        log::error!("Failed to propagate server config to LocalService profile: {e}");
     }
 
     // Bug real, achado numa máquina de técnico reinstalada várias vezes
