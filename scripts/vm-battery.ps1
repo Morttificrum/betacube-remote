@@ -26,7 +26,7 @@ o script so confirma o proxy usado antes (rendezvous_reachable=1 no bridge); a c
 e feita pelo Fernando/Claude com outro Beta Cube Remote e anexada como evidencia.
 #>
 param(
-    [Parameter(Mandatory)][ValidateSet('Prep','Install','Verify','Reboot','NetCycle','Screenshot')][string]$Phase,
+    [Parameter(Mandatory)][ValidateSet('Prep','Install','Verify','Reboot','NetCycle','Screenshot','Window','Uninstall')][string]$Phase,
     [Parameter(Mandatory)][pscredential]$Credential,
     [string]$VmName = 'BetaCubeTeste',
     [string]$Installer,
@@ -166,6 +166,46 @@ switch ($Phase) {
         Connect-VMNetworkAdapter -VMName $VmName -SwitchName $swName
         Start-Sleep 90
         Get-BridgeState $h | Format-List       # esperado: volta sozinho, sem clique
+    }
+    'Uninstall' {
+        Wait-Guest
+        Invoke-Guest {
+            $u = 'C:\Program Files\Beta Cube Remote\uninstall.exe'
+            if (Test-Path $u) { $p = Start-Process $u -ArgumentList '/S' -PassThru; $sw = [Diagnostics.Stopwatch]::StartNew(); while (-not $p.HasExited -and $sw.Elapsed.TotalSeconds -lt 120) { Start-Sleep 3 }; if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force } }
+            Start-Sleep 8
+            # o desinstalador deixa a config (inclusive preset-note); o teste limpa de proposito, so na VM
+            foreach ($d in @('C:\Users\betatest\AppData\Roaming\Beta Cube Remote', 'C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\Beta Cube Remote', 'C:\ProgramData\Beta Cube Remote')) {
+                if ([IO.Directory]::Exists($d)) { [IO.Directory]::Delete($d, $true) }
+            }
+            "instalacao existe: $([IO.Directory]::Exists('C:\Program Files\Beta Cube Remote')); configs removidas"
+        }
+    }
+    'Window' {
+        # abre o app como o usuario (atalho da Area de Trabalho, sessao interativa), traz a janela para frente e tira print
+        Wait-Guest
+        $res = Invoke-Guest {
+            $inner = @'
+Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public class W { [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int c); [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); }
+"@
+$lnk = Get-ChildItem 'C:\Users\Public\Desktop','C:\Users\betatest\Desktop' -Filter 'Beta Cube Remote.lnk' -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($lnk) { Start-Process $lnk.FullName; Start-Sleep 25 } else { 'SEM ATALHO NA AREA DE TRABALHO' | Set-Content C:\Temp\wins.txt }
+$ps = Get-Process | Where-Object { $_.Name -match 'Beta Cube' -and $_.MainWindowHandle -ne 0 }
+$ps | ForEach-Object { "$($_.Id) | h=$($_.MainWindowHandle) | $($_.MainWindowTitle)" } | Add-Content C:\Temp\wins.txt
+$ps | ForEach-Object { [W]::ShowWindow($_.MainWindowHandle,9) | Out-Null; [W]::SetForegroundWindow($_.MainWindowHandle) | Out-Null }
+Start-Sleep 4
+$b = [Windows.Forms.SystemInformation]::VirtualScreen; $bmp = New-Object Drawing.Bitmap $b.Width,$b.Height; [Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location,[Drawing.Point]::Empty,$b.Size); $bmp.Save('C:\Temp\shot.png')
+'@
+            foreach ($x in 'C:\Temp\shot.png', 'C:\Temp\wins.txt') { if ([IO.File]::Exists($x)) { [IO.File]::Delete($x) } }
+            Set-Content C:\Temp\win.ps1 $inner
+            $a = New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Temp\win.ps1'; $pr = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+            Register-ScheduledTask -TaskName BcWin -Action $a -Principal $pr -Force | Out-Null; Start-ScheduledTask -TaskName BcWin; Start-Sleep 45; Unregister-ScheduledTask -TaskName BcWin -Confirm:$false
+            [pscustomobject]@{ b64 = $(if ([IO.File]::Exists('C:\Temp\shot.png')) { [Convert]::ToBase64String([IO.File]::ReadAllBytes('C:\Temp\shot.png')) } else { '' }); wins = @(Get-Content C:\Temp\wins.txt -ErrorAction SilentlyContinue) }
+        }
+        if ($res.b64) { $png = Join-Path $OutDir "window-$(Get-Date -Format yyyyMMdd-HHmmss).png"; [IO.File]::WriteAllBytes($png, [Convert]::FromBase64String($res.b64)); "Print: $png" }
+        "Janelas Beta Cube na sessao interativa: " + ($res.wins -join ' ; ')
     }
     'Screenshot' {
         # PowerShell Direct nao tem desktop: usa Tarefa Agendada interativa (sessao 1), removida ao fim.
