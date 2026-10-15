@@ -10,8 +10,8 @@ DECISÃO DEFINITIVA (Fernando, 2026-10-15) — detalhes no topo do PEDIDOS.md:
 Fonte: `C:\Users\Morttificarum\.claude-antigo\projects\C--Users-mortt\memory\`. Nada abaixo é invenção; se algo conflitar com um pedido explícito do Fernando na hora, vale o pedido dele.
 
 **Fluxo de trabalho (feedback_betacube_workflow)**
-- Mostrar o diff antes de commitar. Não juntar "fazer a edição" e "commitar" num passo só, mesmo com a edição aprovada antes — esperar o "pode commitar" depois de ver o diff.
-- Commit e push são duas aprovações separadas: commitar local não autoriza push; o Fernando quer revisar o diff no GitHub antes de subir. *(Em 2026-10-15 ele pediu explicitamente "commit + push" juntos em tarefas específicas; nesses casos vale o que ele pediu.)*
+- Edição → commit + push: **pode fazer commit e push juntos, sempre, sem pedir aprovação separada** (decisão do Fernando, 2026-10-15; substitui a regra antiga de 2026-09-08 de mostrar o diff e esperar "pode commitar"/"pode fazer o push"). Continua valendo reportar o que mudou e verificar o diff antes de afirmar que terminou.
+- Docs-only (`*.md`) não disparam mais o CI (filtro de caminhos em `ci.yml` e `flutter-ci.yml`, 2026-10-15). Falhas de macOS/flatpak nos builds são ignoradas: não fazem parte da loja.
 - Edições em massa (ex.: trocar "RustDesk" por "Beta Cube Remote" em 50 arquivos de tradução) devem se restringir às linhas/chaves exatas, sem find-replace cego, e provar com `git diff` que o resto ficou intacto antes de dizer que terminou.
 - Quando algo parecer errado, reverificar no arquivo/commit real antes de concordar (o Fernando já se enganou sobre o que estava commitado; mostrar o diff resolveu).
 - Quando o CI falhar, puxar o log real do job (`gh api repos/.../actions/jobs/<id>/logs`) e achar a linha do erro antes de propor correção; adivinhar pelo sintoma desperdiçou ciclos.

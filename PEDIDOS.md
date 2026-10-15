@@ -63,8 +63,7 @@ Legenda: `[ ]` pendente · `[~]` em andamento · `[x]` entregue e testado
 
 - [ ] Várias senhas simultâneas por máquina (~5), cada uma com nível de permissão (controle total, só visualização, admin, RH...).
 - [ ] Build Android (.apk) para acessar as lojas pelo celular (prioridade: equipe de 3-4 pessoas em campo).
-- [ ] iOS (por último).
-  - Divergência registrada: a memória de 2026-09-08 anotava iOS como fora de escopo ("sem distribuição iOS"); este pedido mantém iOS "por último". Fernando confirma qual vale.
+- [ ] iOS — **fora de escopo por enquanto** (decisão do Fernando, 2026-10-15); retomar só por último.
 
 ## 4. Gestão de equipamentos / clientes
 
