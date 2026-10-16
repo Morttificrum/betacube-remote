@@ -99,7 +99,8 @@ Section "Instalar ${APP_NAME}" SecMain
   ; "Usage: File..."), o certo é `"/oname=valor"`.
   File "/oname=${APP_EXE}" "..\rdpayload\RustDesk.exe"
   ; Driver da impressora virtual do RustDesk: nao instalamos (instalacao silenciosa nao instala a impressora) e o nome nao pode aparecer ao cliente (decisao 2026-10-15).
-File /r /x "RustDesk.exe" /x "RustDeskPrinterDriver" "..\rdpayload\*.*"
+; RuntimeBroker_rustdesk.exe: so serve ao modo privacidade (nunca usado) e tem "rustdesk" no nome -- nao empacota.
+File /r /x "RustDesk.exe" /x "RustDeskPrinterDriver" /x "RuntimeBroker_rustdesk.exe" "..\rdpayload\*.*"
   File "..\hwsensor-helper.exe"
 
   ; O nome da pasta/arquivo de config é derivado de APP_NAME em tempo de

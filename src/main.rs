@@ -3,7 +3,7 @@
     windows_subsystem = "windows"
 )]
 
-use librustdesk::*;
+use betacube_core::*;
 
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 fn main() {
@@ -48,7 +48,7 @@ fn main() {
     );
     let matches = App::new("rustdesk")
         .version(crate::VERSION)
-        .author("Purslane Tech Pte. Ltd.<info@rustdesk.com>")
+        .author("Beta Cube Solucoes em TI")
         .about("RustDesk command line tool")
         .args_from_usage(&args)
         .get_matches();

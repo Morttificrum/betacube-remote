@@ -1,15 +1,15 @@
 [package]
 name = "rustdesk"
 version = "1.4.8"
-authors = ["rustdesk <info@rustdesk.com>"]
+authors = ["Beta Cube Solucoes em TI"]
 edition = "2021"
 build= "build.rs"
-description = "RustDesk Remote Desktop"
+description = "Beta Cube Remote"
 default-run = "rustdesk"
 rust-version = "1.75"
 
 [lib]
-name = "librustdesk"
+name = "betacube_core"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [[bin]]

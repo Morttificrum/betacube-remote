@@ -26,7 +26,7 @@ o script so confirma o proxy usado antes (rendezvous_reachable=1 no bridge); a c
 e feita pelo Fernando/Claude com outro Beta Cube Remote e anexada como evidencia.
 #>
 param(
-    [Parameter(Mandatory)][ValidateSet('Prep','Install','Verify','Reboot','NetCycle','Screenshot')][string]$Phase,
+    [Parameter(Mandatory)][ValidateSet('Prep','Install','Verify','Reboot','NetCycle','Screenshot','Window','Uninstall')][string]$Phase,
     [Parameter(Mandatory)][pscredential]$Credential,
     [string]$VmName = 'BetaCubeTeste',
     [string]$Installer,
@@ -52,8 +52,13 @@ function Invoke-Guest([scriptblock]$Block, $ArgList = @()) {
 function Get-BridgeState([string]$HostName) {
     try {
         $d = Invoke-RestMethod -Uri $BridgeDevicesUrl -TimeoutSec 20
-        $d | Where-Object { $_.hostname -eq $HostName } | Sort-Object last_seen_at -Descending | Select-Object -First 1 `
-            hostname, rustdesk_id, last_seen_at, rendezvous_reachable, rendezvous_reachable_at
+        $r = $d | Where-Object { $_.hostname -eq $HostName } | Sort-Object last_seen_at -Descending | Select-Object -First 1
+        $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $age = { param($v) if ($null -eq $v -or "$v" -eq '') { 'n/d' } else { [int]($now - [double](("$v") -replace ',', '.')) } }
+        [pscustomobject]@{
+            hostname = $r.hostname; rustdesk_id = $r.rustdesk_id; rendezvous_reachable = $r.rendezvous_reachable
+            idade_last_seen_s = (& $age $r.last_seen_at); idade_reachable_s = (& $age $r.rendezvous_reachable_at)   # esperado: poucos segundos
+        }
     } catch { "bridge inacessivel: $($_.Exception.Message)" }
 }
 
@@ -134,9 +139,16 @@ switch ($Phase) {
     'Reboot' {
         for ($i = 1; $i -le $Count; $i++) {
             "=== Reinicio $i/$Count"
-            Restart-VM -Name $VmName -Force
+            # reinicio pelo proprio guest (mais fiel ao "usuario reinicia o PC"); Restart-VM -Force chegou a travar a VM no boot
+            try { Invoke-Command -VMName $VmName -Credential $Credential -ScriptBlock { shutdown.exe /r /t 0 /f } -ErrorAction Stop } catch { "(guest caiu durante o comando de reinicio: normal)" }
+            $sw = [Diagnostics.Stopwatch]::StartNew()
             Start-Sleep 20
-            Wait-Guest 600
+            $ok = $false
+            while ($sw.Elapsed.TotalSeconds -lt 420) {
+                try { Invoke-Command -VMName $VmName -Credential $Credential -ScriptBlock { 1 } -ErrorAction Stop | Out-Null; $ok = $true; break } catch { Start-Sleep 10 }
+            }
+            if (-not $ok) { "!!! VM NAO VOLTOU em 420 s (travou no boot) -- reset forcado do Hyper-V"; Stop-VM -Name $VmName -TurnOff -Force; Start-Sleep 5; Start-VM -Name $VmName; Wait-Guest 300 }
+            "guest voltou em $([int]$sw.Elapsed.TotalSeconds)s"
             Start-Sleep 60                       # tempo para o servico subir e registrar sozinho, sem clique
             $s = Invoke-Guest { param($app) [pscustomobject]@{ Host = $env:COMPUTERNAME; Servico = ((& sc.exe query $app) -join ' ') } } -ArgList $AppName
             $s | Format-List
@@ -146,14 +158,54 @@ switch ($Phase) {
     'NetCycle' {
         Wait-Guest
         $h = (Invoke-Guest { $env:COMPUTERNAME })
-        $vmNic = Get-VMNetworkAdapter -VMName $VmName
+        $swName = (Get-VMNetworkAdapter -VMName $VmName).SwitchName   # guardar ANTES de desconectar (depois fica vazio)
         "=== Rede DESCONECTADA"
         Disconnect-VMNetworkAdapter -VMName $VmName
         Start-Sleep 90
         "=== Rede RECONECTADA"
-        Connect-VMNetworkAdapter -VMNetworkAdapter $vmNic -SwitchName $vmNic.SwitchName
+        Connect-VMNetworkAdapter -VMName $VmName -SwitchName $swName
         Start-Sleep 90
         Get-BridgeState $h | Format-List       # esperado: volta sozinho, sem clique
+    }
+    'Uninstall' {
+        Wait-Guest
+        Invoke-Guest {
+            $u = 'C:\Program Files\Beta Cube Remote\uninstall.exe'
+            if (Test-Path $u) { $p = Start-Process $u -ArgumentList '/S' -PassThru; $sw = [Diagnostics.Stopwatch]::StartNew(); while (-not $p.HasExited -and $sw.Elapsed.TotalSeconds -lt 120) { Start-Sleep 3 }; if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force } }
+            Start-Sleep 8
+            # o desinstalador deixa a config (inclusive preset-note); o teste limpa de proposito, so na VM
+            foreach ($d in @('C:\Users\betatest\AppData\Roaming\Beta Cube Remote', 'C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\Beta Cube Remote', 'C:\ProgramData\Beta Cube Remote')) {
+                if ([IO.Directory]::Exists($d)) { [IO.Directory]::Delete($d, $true) }
+            }
+            "instalacao existe: $([IO.Directory]::Exists('C:\Program Files\Beta Cube Remote')); configs removidas"
+        }
+    }
+    'Window' {
+        # abre o app como o usuario (atalho da Area de Trabalho, sessao interativa), traz a janela para frente e tira print
+        Wait-Guest
+        $res = Invoke-Guest {
+            $inner = @'
+Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public class W { [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int c); [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); }
+"@
+$lnk = Get-ChildItem 'C:\Users\Public\Desktop','C:\Users\betatest\Desktop' -Filter 'Beta Cube Remote.lnk' -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($lnk) { Start-Process $lnk.FullName; Start-Sleep 25 } else { 'SEM ATALHO NA AREA DE TRABALHO' | Set-Content C:\Temp\wins.txt }
+$ps = Get-Process | Where-Object { $_.Name -match 'Beta Cube' -and $_.MainWindowHandle -ne 0 }
+$ps | ForEach-Object { "$($_.Id) | h=$($_.MainWindowHandle) | $($_.MainWindowTitle)" } | Add-Content C:\Temp\wins.txt
+$ps | ForEach-Object { [W]::ShowWindow($_.MainWindowHandle,9) | Out-Null; [W]::SetForegroundWindow($_.MainWindowHandle) | Out-Null }
+Start-Sleep 4
+$b = [Windows.Forms.SystemInformation]::VirtualScreen; $bmp = New-Object Drawing.Bitmap $b.Width,$b.Height; [Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location,[Drawing.Point]::Empty,$b.Size); $bmp.Save('C:\Temp\shot.png')
+'@
+            foreach ($x in 'C:\Temp\shot.png', 'C:\Temp\wins.txt') { if ([IO.File]::Exists($x)) { [IO.File]::Delete($x) } }
+            Set-Content C:\Temp\win.ps1 $inner
+            $a = New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Temp\win.ps1'; $pr = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+            Register-ScheduledTask -TaskName BcWin -Action $a -Principal $pr -Force | Out-Null; Start-ScheduledTask -TaskName BcWin; Start-Sleep 45; Unregister-ScheduledTask -TaskName BcWin -Confirm:$false
+            [pscustomobject]@{ b64 = $(if ([IO.File]::Exists('C:\Temp\shot.png')) { [Convert]::ToBase64String([IO.File]::ReadAllBytes('C:\Temp\shot.png')) } else { '' }); wins = @(Get-Content C:\Temp\wins.txt -ErrorAction SilentlyContinue) }
+        }
+        if ($res.b64) { $png = Join-Path $OutDir "window-$(Get-Date -Format yyyyMMdd-HHmmss).png"; [IO.File]::WriteAllBytes($png, [Convert]::FromBase64String($res.b64)); "Print: $png" }
+        "Janelas Beta Cube na sessao interativa: " + ($res.wins -join ' ; ')
     }
     'Screenshot' {
         # PowerShell Direct nao tem desktop: usa Tarefa Agendada interativa (sessao 1), removida ao fim.

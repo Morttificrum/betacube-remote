@@ -127,6 +127,19 @@ pub fn global_init() -> bool {
     // runs after this in both the desktop (core_main) and mobile (flutter_ffi)
     // init paths — we just don't ship a custom.txt, so this default always wins.
     *config::APP_NAME.write().unwrap() = "Beta Cube Remote".to_owned();
+    // Beta Cube Remote: servidor padrao proprio. Evita cair no servidor publico do RustDesk
+    // (constantes RENDEZVOUS_SERVERS/RS_PUB_KEY vivem no submodulo hbb_common e nao sao usadas se estas opcoes existem).
+    {
+        let mut d = config::DEFAULT_SETTINGS.write().unwrap();
+        for (k, v) in [
+            ("custom-rendezvous-server", "remote.betacube.com.br"),
+            ("relay-server", "remote.betacube.com.br"),
+            ("api-server", "http://remote.betacube.com.br:21114"),
+            ("key", "YcoVB4h1Ldi08DJmV4X1Yk7u0gi0yQFmqCgbLwZ9wsk="),
+        ] {
+            d.entry(k.to_owned()).or_insert_with(|| v.to_owned());
+        }
+    }
 
     #[cfg(target_os = "linux")]
     {

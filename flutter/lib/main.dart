@@ -109,26 +109,6 @@ Future<void> main(List<String> args) async {
     runConnectionManagerScreen();
   } else if (args.contains('--install')) {
     runInstallPage();
-  } else if (bind.mainGetOptionSync(key: 'preset-note').isNotEmpty) {
-    // Proteção do app nas lojas (pedido de teste real, 2026-09-24): nada
-    // com janela pode aparecer pro funcionário -- só o serviço em
-    // segundo plano. `preset-note` só vem preenchido em instalador de
-    // loja (STORE_NAME); instalador genérico (máquina-hub de técnico)
-    // continua abrindo normal. O lado Rust (core_main.rs) já recusa
-    // lançar o ícone de bandeja pelo mesmo sinal -- isso aqui cobre o
-    // caso de alguém clicar num atalho remanescente que chame o exe puro.
-    //
-    // Bug real (2026-10-06, achado testando a VM BetaCubeTeste e o PC
-    // do usuário com o instalador TesteVM -- STORE_NAME setado): a shell
-    // nativa da janela (Win32/engine) já é criada pelo embedder ANTES
-    // do Dart chegar aqui -- um `return` simples sem nunca chamar
-    // `windowManager` deixa essa janela nativa vazia (sem pintura
-    // nenhuma) visível na tela pra sempre, parecendo "tela branca"
-    // travada em vez de "nenhuma janela". Precisa inicializar o window
-    // manager e esconder explicitamente a janela que já existe.
-    await windowManager.ensureInitialized();
-    await windowManager.hide();
-    return;
   } else {
     desktopType = DesktopType.main;
     await windowManager.ensureInitialized();
@@ -156,6 +136,15 @@ Future<void> initEnv(String appType) async {
 void runMainApp(bool startService) async {
   // register uni links
   await initEnv(kAppTypeMain);
+  // Protecao do app nas lojas (2026-09-24): com `preset-note` (STORE_NAME do instalador de loja)
+  // nada com janela pode aparecer pro funcionario. Esta checagem TEM que ficar aqui, DEPOIS do
+  // `initEnv` (que inicializa o FFI): antes, `bind.mainGetOptionSync` lancava
+  // LateInitializationError (`_ffiBind` nao inicializado) no `main()` e deixava a janela nativa
+  // vazia/branca em TODO instalador (generico incluso). Achado em 2026-10-15 na VM, via stderr do exe.
+  if (bind.mainGetOptionSync(key: 'preset-note').isNotEmpty) {
+    await windowManager.hide();
+    return;
+  }
   checkUpdate();
   // trigger connection status updater
   await bind.mainCheckConnectStatus();
