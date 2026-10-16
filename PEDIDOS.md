@@ -25,7 +25,7 @@ Legenda: `[ ]` pendente · `[~]` em andamento · `[x]` entregue e testado
 - Ordem prevista (herdada do plano de 2026-10-07): Agent v1 (heartbeat/inventário) → Agent v2 (Ações Rápidas) → Painel v1 (lista + Conectar) → Painel v2 (Ações Rápidas + GLPI) → rollout nas 33 lojas, sem prazo fixo.
 
 ---
-**Regra fixa de release (2026-10-06):** nenhuma versão vai pra loja sem passar nos 7 passos do checklist (`AGENTS.md`) na VM **e** no PC do Fernando, com prova de cada um: instalar por cima, 1 atalho só, serviço criado/rodando, janela abre normal com ID/senha, registro no hbbs, conexão com janela fechada, reinício e tudo volta sozinho. Fernando não testa em loja.
+**Regra fixa de release (2026-10-06):** nenhuma versão vai pra loja sem passar nos 7 passos do checklist (`AGENTS.md`) na VM **e** no PC do Fernando, com prova de cada um: instalar por cima, 1 atalho só, serviço criado/rodando, janela abre normal com ID/senha, registro no hbbs, conexão com janela fechada, reinício e tudo volta sozinho; **8 (2026-10-16): acesso com senha fixa, sem ninguém aceitar, com a VM na tela de login logo após reiniciar e com a sessão bloqueada.** Fernando não testa em loja.
 **Resultado da bateria (2026-10-15/16, VM BetaCubeTeste, instalador final `build-final-1015`):** passo 1 (por cima de loja antiga de 06/10) OK; 2 (um atalho principal) OK; 3 (serviço rodando) OK; 4 (janela com ID e senha) OK **depois** dos fixes `1d615d0e3`/`3d5fd0603` (antes falhava em todos os builds); 5 (registro no hbbs) OK; 6 (conexão com a janela fechada) OK — Fernando conectou do PC dele no ID da VM e a tela apareceu; 7 (reinício, volta sozinho) OK. **Falta a repetição no PC real do Fernando** antes de qualquer instalador de loja.
 
 ---
@@ -67,6 +67,7 @@ Legenda: `[ ]` pendente · `[~]` em andamento · `[x]` entregue e testado
 ## 3. Acesso e permissões
 
 - [ ] Várias senhas simultâneas por máquina (~5), cada uma com nível de permissão (controle total, só visualização, admin, RH...).
+- [ ] **Acesso não supervisionado, igual ao do AnyDesk (requisito do Fernando, 2026-10-16):** nas máquinas de loja o Fernando conecta com a **senha fixa**, **sem ninguém aceitar nada**, **inclusive com o Windows na tela de login ou bloqueado e logo depois de reiniciar** (sem ninguém logar). Precisa de: senha fixa definida na instalação (a definir com o Fernando como ela chega ao instalador), método de verificação "só senha fixa" e aprovação por senha (nada de janela "aceitar conexão"), e o serviço atendendo a tela de login. **Teste obrigatório na bateria da VM (passo 8 do checklist):** reiniciar a VM, deixá-la na tela de login sem ninguém logar (`quser` vazio), e o Fernando conectar do PC dele com a senha fixa; repetir com a sessão bloqueada. Só vira `[x]` depois dessa conexão confirmada por ele. Status 2026-10-16: nunca testado com a tela de login (o passo 6 foi com o usuário logado e a janela do app fechada).
 - [ ] Build Android (.apk) para acessar as lojas pelo celular (prioridade: equipe de 3-4 pessoas em campo).
 - [ ] iOS — **fora de escopo por enquanto** (decisão do Fernando, 2026-10-15); retomar só por último.
 

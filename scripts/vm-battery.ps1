@@ -26,7 +26,7 @@ o script so confirma o proxy usado antes (rendezvous_reachable=1 no bridge); a c
 e feita pelo Fernando/Claude com outro Beta Cube Remote e anexada como evidencia.
 #>
 param(
-    [Parameter(Mandatory)][ValidateSet('Prep','Install','Verify','Reboot','NetCycle','Screenshot','Window','Uninstall')][string]$Phase,
+    [Parameter(Mandatory)][ValidateSet('Prep','Install','Verify','Reboot','NetCycle','Screenshot','Window','Uninstall','LoginScreen','RestoreLogon','LockSession')][string]$Phase,
     [Parameter(Mandatory)][pscredential]$Credential,
     [string]$VmName = 'BetaCubeTeste',
     [string]$Installer,
@@ -206,6 +206,54 @@ $b = [Windows.Forms.SystemInformation]::VirtualScreen; $bmp = New-Object Drawing
         }
         if ($res.b64) { $png = Join-Path $OutDir "window-$(Get-Date -Format yyyyMMdd-HHmmss).png"; [IO.File]::WriteAllBytes($png, [Convert]::FromBase64String($res.b64)); "Print: $png" }
         "Janelas Beta Cube na sessao interativa: " + ($res.wins -join ' ; ')
+    }
+    'LoginScreen' {
+        # Passo 8 do checklist (acesso nao supervisionado): VM reiniciada e PARADA NA TELA DE LOGIN, ninguem logado.
+        # Desliga o autologon (guarda o valor antigo), reinicia pelo guest e confere que nao ha sessao de usuario.
+        Wait-Guest
+        Invoke-Guest {
+            $k = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+            $old = (Get-ItemProperty $k).AutoAdminLogon
+            Set-Content C:\Temp\autologon-backup.txt "$old"
+            Set-ItemProperty $k -Name AutoAdminLogon -Value '0'
+            "AutoAdminLogon: $old -> 0 (valor antigo guardado em C:\Temp\autologon-backup.txt)"
+        }
+        try { Invoke-Command -VMName $VmName -Credential $Credential -ScriptBlock { shutdown.exe /r /t 0 /f } -ErrorAction Stop } catch { '(guest caiu durante o comando de reinicio: normal)' }
+        Start-Sleep 25
+        Wait-Guest 420
+        Start-Sleep 75                            # serviço sobe e registra sozinho, sem ninguem logado
+        $r = Invoke-Guest {
+            $q = (quser 2>&1) -join ' '
+            [pscustomobject]@{
+                Host = $env:COMPUTERNAME
+                Sessoes = $(if ($q -match 'USERNAME|USU') { $q } else { 'NENHUMA sessao de usuario (tela de login)' })
+                Servico = ((& sc.exe query 'Beta Cube Remote') -match 'ESTADO' -join '')
+                ProcessosSessao1 = @(Get-Process | Where-Object { $_.Name -match 'Beta Cube' -and $_.SessionId -ne 0 } | ForEach-Object { "$($_.Id)/sess$($_.SessionId)" })
+            }
+        }
+        $r | Format-List
+        Get-BridgeState $r.Host | Format-List
+        'VM PARADA NA TELA DE LOGIN. Conecte do PC do Fernando com a senha fixa; depois rode -Phase RestoreLogon.'
+    }
+    'RestoreLogon' {
+        Wait-Guest
+        Invoke-Guest {
+            $k = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+            $old = if ([IO.File]::Exists('C:\Temp\autologon-backup.txt')) { (Get-Content C:\Temp\autologon-backup.txt).Trim() } else { '1' }
+            Set-ItemProperty $k -Name AutoAdminLogon -Value $old
+            "AutoAdminLogon restaurado para $old"
+        }
+    }
+    'LockSession' {
+        # sessao do usuario logada porem BLOQUEADA (Win+L) -- segundo cenario do passo 8
+        Wait-Guest
+        Invoke-Guest {
+            $a = New-ScheduledTaskAction -Execute 'rundll32.exe' -Argument 'user32.dll,LockWorkStation'
+            $pr = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+            Register-ScheduledTask -TaskName BcLock -Action $a -Principal $pr -Force | Out-Null; Start-ScheduledTask -TaskName BcLock; Start-Sleep 6; Unregister-ScheduledTask -TaskName BcLock -Confirm:$false
+            'quser: ' + ((quser 2>&1) -join ' ') + '  | LogonUI em execucao: ' + @(Get-Process LogonUI -ErrorAction SilentlyContinue).Count
+        }
+        'Sessao bloqueada. Conecte do PC do Fernando com a senha fixa.'
     }
     'Screenshot' {
         # PowerShell Direct nao tem desktop: usa Tarefa Agendada interativa (sessao 1), removida ao fim.
