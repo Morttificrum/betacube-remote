@@ -20,6 +20,7 @@ import '../../models/platform_model.dart';
 import '../../common/shared_state.dart';
 import '../../utils/image.dart';
 import '../widgets/remote_toolbar.dart';
+import '../../betacube/tools_sidebar.dart';
 import '../widgets/kb_layout_type_chooser.dart';
 import '../widgets/tabbar_widget.dart';
 
@@ -483,6 +484,8 @@ class _RemotePageState extends State<RemotePage>
               _ffi.ffiModel.pi.isSet.isFalse ? emptyOverlay() : Offstage(),
             ],
           ),
+          // Beta Cube: barra lateral de ferramentas (modulo flutter/lib/betacube/, unico ponto de encaixe).
+          BetaCubeSessionTools(rustdeskId: widget.id, hostname: _ffi.ffiModel.pi.hostname.isNotEmpty ? _ffi.ffiModel.pi.hostname : widget.id, enabled: _ffi.connType == ConnType.defaultConn && _ffi.ffiModel.pi.isSet.isTrue && _ffi.ffiModel.pi.platform == kPeerPlatformWindows),
         ],
       );
     }

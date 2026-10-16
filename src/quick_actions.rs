@@ -61,6 +61,7 @@ fn execute(cmd: &PendingCommand) -> (String, Value) {
         "reboot_now" => reboot_now(),
         "unstick_printer" => unstick_printer(),
         "restart_services" => restart_services_matching(cmd),
+        "wnb_services" => wnb_services(cmd),
         "disable_defender" => disable_defender(),
         "disable_firewall" => disable_firewall(),
         "list_driver_issues" => list_driver_issues(),
@@ -607,6 +608,56 @@ fn stop_and_start_service_hard_script(name: &str) -> String {
     )
 }
 
+/// "Reiniciar VPN (WNB)" (pedido de 2026-10-16, barra lateral da sessão): lista os serviços `WNB*`
+/// (Name OU DisplayName, ex.: `WNBMonitor`, `WNBTLSclient`, "WNB Monitor"), e com `restart=true`
+/// reinicia cada um com o mesmo ciclo garantido parar → verificar → matar por PID → iniciar
+/// (`stop_and_start_service_hard_script`). Devolve o status ANTES e DEPOIS pra o técnico ver que
+/// voltou. Se numa loja aparecer outro nome parecido (WNB*), ele entra na lista e é reiniciado junto.
+#[cfg(windows)]
+fn wnb_services(cmd: &PendingCommand) -> (String, Value) {
+    let restart = cmd.params.get("restart").and_then(|v| v.as_bool()).unwrap_or(false);
+    let list = || -> Result<Vec<Value>, (String, Value)> {
+        let (status, out) = run_powershell(
+            "Get-Service | Where-Object { $_.Name -like 'WNB*' -or $_.DisplayName -like 'WNB*' } | \
+             Select-Object Name,DisplayName,@{n='Status';e={$_.Status.ToString()}},@{n='StartType';e={$_.StartType.ToString()}} | \
+             Sort-Object Name | ConvertTo-Json -Compress",
+        );
+        if status != "done" {
+            return Err((status, out));
+        }
+        let stdout = out.get("stdout").and_then(|s| s.as_str()).unwrap_or("").trim().to_owned();
+        if stdout.is_empty() {
+            return Ok(Vec::new());
+        }
+        match serde_json::from_str::<Value>(&stdout) {
+            Ok(Value::Array(a)) => Ok(a),
+            Ok(other) => Ok(vec![other]),
+            Err(_) => Err(("failed".to_owned(), json!({"error": "falha ao interpretar a lista de serviços WNB*"}))),
+        }
+    };
+
+    let before = match list() {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if before.is_empty() {
+        return (
+            "failed".to_owned(),
+            json!({"error": "nenhum serviço WNB* encontrado (Name ou DisplayName) nesta máquina", "restart": restart}),
+        );
+    }
+    let mut restarted = Vec::new();
+    if restart {
+        for s in &before {
+            if let Some(name) = s.get("Name").and_then(|v| v.as_str()) {
+                let (_, out) = run_powershell(&stop_and_start_service_hard_script(name));
+                restarted.push(json!({"service": name, "result": out}));
+            }
+        }
+    }
+    let after = if restart { list().unwrap_or_default() } else { before.clone() };
+    ("done".to_owned(), json!({"restart": restart, "before": before, "restarted": restarted, "after": after}))
+}
 #[cfg(windows)]
 fn disable_defender() -> (String, Value) {
     // A confirmação explícita já acontece no Flutter antes de enfileirar
