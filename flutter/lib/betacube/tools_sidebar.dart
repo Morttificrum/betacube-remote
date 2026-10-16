@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../desktop/pages/equipment_detail_dialog.dart';
 import '../models/equipment_model.dart';
+import '../common.dart';
 import '../models/model.dart';
 import 'tools_catalog.dart';
 import 'tools_runner.dart';

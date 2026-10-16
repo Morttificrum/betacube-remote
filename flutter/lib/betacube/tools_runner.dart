@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../common.dart';
 import '../models/model.dart';
 
 /// Executor das ferramentas da barra lateral: enfileira a Ação Rápida no bridge (mesmo caminho que o
