@@ -45,6 +45,7 @@ Antes de dizer "corrigido/validado" ou de regenerar os 32 instaladores, verifica
 - UAC desativado só nessa VM de teste (nunca no PC real nem em máquina de loja).
 - `Copy-VMFile` é só host→guest (exige o serviço de integração "Interface de Serviço de Convidado"); para trazer arquivo do guest, ler bytes dentro do `Invoke-Command` e converter em Base64.
 - PowerShell Direct não tem desktop: para capturar janela real, registrar Tarefa Agendada com `LogonType Interactive` (sessão 1) e disparar.
+- **Sessão Avançada do Hyper-V DESLIGADA (2026-10-16, decisão do Fernando):** com `EnableEnhancedSessionMode` ligado, abrir o vmconnect derrubava a conexão do Beta Cube Remote (e vice-versa) — não era bug do app. Desligado com `Set-VMHost -EnableEnhancedSessionMode $false`; agora o vmconnect e o Beta Cube Remote mostram a mesma tela e podem ficar abertos juntos. Não religar. O teste de acesso não supervisionado (passo 8) usa os dois ao mesmo tempo.
 - **Armadilha dos Checkpoints Automáticos:** com `AutomaticCheckpointsEnabled=True` qualquer alteração feita com a VM ligada é descartada no próximo Stop+Start. Conferir que está `False` antes de contar com configuração/software persistente.
 - Método de teste do pinpad: simular na VM (portas COM fantasma, serviço falso "WNB Monitor", Driver Booster real, bloqueio de Windows Update real); hardware físico fica sem teste até a loja.
 

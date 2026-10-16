@@ -680,7 +680,7 @@ fn disable_firewall() -> (String, Value) {
 #[cfg(windows)]
 fn list_driver_issues() -> (String, Value) {
     run_powershell(
-        "Get-PnpDevice -Status Error | Select-Object FriendlyName,InstanceId,ConfigManagerErrorCode, \
+        "Get-PnpDevice -Status Error -ErrorAction SilentlyContinue | Select-Object FriendlyName,InstanceId,ConfigManagerErrorCode, \
          @{Name='VID';Expression={if ($_.InstanceId -match 'VID_([0-9A-Fa-f]{4})') { $matches[1] } else { $null }}}, \
          @{Name='PID';Expression={if ($_.InstanceId -match 'PID_([0-9A-Fa-f]{4})') { $matches[1] } else { $null }}} \
          | ConvertTo-Json",
@@ -690,7 +690,7 @@ fn list_driver_issues() -> (String, Value) {
 #[cfg(windows)]
 fn list_usb_devices() -> (String, Value) {
     run_powershell(
-        "Get-PnpDevice -Class USB -PresentOnly | Select-Object FriendlyName,InstanceId,Status | ConvertTo-Json",
+        "Get-PnpDevice -Class USB -PresentOnly -ErrorAction SilentlyContinue | Select-Object FriendlyName,InstanceId,Status | ConvertTo-Json",
     )
 }
 

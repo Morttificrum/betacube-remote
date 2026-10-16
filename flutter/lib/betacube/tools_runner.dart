@@ -80,7 +80,7 @@ String bcSummarize(BcCommandResult r) {
   final lines = <String>[];
   if (d['note'] != null) lines.add(d['note'].toString());
   final stdout = (d['stdout']?.toString() ?? '').trim();
-  if (stdout.isNotEmpty) lines.add(stdout);
+  if (stdout.isNotEmpty) lines.add(_friendlyStdout(stdout));
   if (d['matched'] is List && (d['matched'] as List).isNotEmpty) {
     lines.add('Serviços: ${(d['matched'] as List).join(", ")}');
     for (final r in (d['results'] as List? ?? [])) {
@@ -94,6 +94,37 @@ String bcSummarize(BcCommandResult r) {
   }
   if (lines.isEmpty) lines.add('Concluído.');
   return _clip(lines.join('\n'));
+}
+
+/// Saídas de console longas (sfc/DISM) trazem dezenas de linhas de progresso ("Verificação 12% concluída.") e o
+/// veredito só no fim: tira o progresso e mostra o FINAL. Resultados em JSON (reset de impressora/COM) viram frase.
+String _friendlyStdout(String stdout) {
+  try {
+    final v = jsonDecode(stdout);
+    if (v is Map) {
+      if (v['error'] != null) return 'Falhou: ${v['error']}';
+      if (v.containsKey('printer')) {
+        final removed = v['driver_removed'] == true;
+        final shared = v['shared_with_other_printers'] == true;
+        return 'Impressora "${v['printer']}" removida. Driver "${v['driver']}": ' +
+            (removed ? 'removido.' : (shared ? 'mantido (outras impressoras ainda usam).' : 'mantido.'));
+      }
+      if (v.containsKey('ghost_removed')) {
+        final g = v['ghost_removed'];
+        final ghosts = g is List ? g.length : (g is Map && g.isNotEmpty ? 1 : 0);
+        final rec = v['reconnected'] is List ? (v['reconnected'] as List).length : 0;
+        return 'Portas COM fantasma removidas: $ghosts. Dispositivos de porta reconectados: $rec.';
+      }
+    }
+  } catch (_) {}
+  final cleaned = stdout
+      .replaceAll(RegExp(r'Verifica\S*\s+\d+%\s+conclu\S*\.?'), '')
+      .replaceAll(RegExp(r'\d+(\.\d+)?%'), '')
+      .replaceAll(RegExp(r'[ \t]+\n'), '\n')
+      .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+      .trim();
+  if (cleaned.length <= 900) return cleaned;
+  return '…${cleaned.substring(cleaned.length - 900)}';
 }
 
 String _summarizeServices(Map<String, dynamic> d) {
