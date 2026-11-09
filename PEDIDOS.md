@@ -67,7 +67,8 @@ Legenda: `[ ]` pendente · `[~]` em andamento · `[x]` entregue e testado
 ## 3. Acesso e permissões
 
 - [ ] Várias senhas simultâneas por máquina (~5), cada uma com nível de permissão (controle total, só visualização, admin, RH...).
-- [ ] Build Android (.apk) para acessar as lojas pelo celular (prioridade: equipe de 3-4 pessoas em campo).
+- [~] Build Android (.apk) para acessar as lojas pelo celular (prioridade: equipe de 3-4 pessoas em campo).
+  - 2026-11-09: APK arm64-v8a gerado e assinado (branch `android-apk`, partida na tag `remote-release-2026-10-15`, workflow `android-apk.yml`, fork Beta Cube). applicationId `br.com.betacube.remote`, nome "Beta Cube Remote", servidor/chave `remote.betacube.com.br` embutidos. Chave de assinatura propria em `C:\Users\Morttificarum\.betacube-signing\` (fora do git; secrets `BC_ANDROID_KEYSTORE_*` no repo) - NUNCA perder: sem ela os proximos APKs nao atualizam por cima. Entrega: `C:\projetos\entrega\android\BetaCubeRemote.apk` + `SHA256.txt`. Causa da falha de outubro: Gradle baixava o SDK com zip truncado (instabilidade do GitHub), nao o ffmpeg; corrigido com pre-instalacao do SDK + retry. Windows intocado. Falta: teste em aparelho (ID/senha, tela, teclado, 4G) e APK universal (nao feito).
 - [ ] iOS — **fora de escopo por enquanto** (decisão do Fernando, 2026-10-15); retomar só por último.
 
 ## 4. Gestão de equipamentos / clientes
