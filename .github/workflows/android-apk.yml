@@ -7,6 +7,9 @@ name: Beta Cube Remote - APK Android (arm64, assinado)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [android-apk]
+    paths: [".github/workflows/android-apk.yml"]
 
 permissions:
   contents: read
